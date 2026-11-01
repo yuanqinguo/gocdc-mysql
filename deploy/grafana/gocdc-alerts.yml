@@ -1,0 +1,34 @@
+# gocdc 告警规则（11 文档 §4；PrometheusRule 或 rule_files 挂载）
+groups:
+  - name: gocdc-critical
+    rules:
+      - alert: GocdcLeaderMissing
+        expr: max(gocdc_leader_state) == 0
+        for: 1m
+        labels: {severity: critical}
+        annotations: {summary: "gocdc 无 leader（选举失败/全部节点失联）"}
+      - alert: GocdcPipelinePaused
+        expr: sum(gocdc_pipeline_paused) > 0
+        for: 5m
+        labels: {severity: critical}
+        annotations: {summary: "管线暂停（DDL/转换失败/sink 熔断），位点冻结等待人工"}
+      - alert: GocdcEventLagHigh
+        expr: gocdc_event_lag_seconds > 300
+        for: 5m
+        labels: {severity: warning}
+        annotations: {summary: "事件延迟 > 5 分钟"}
+      - alert: GocdcPositionSaveFailing
+        expr: increase(gocdc_position_save_failures_total[10m]) > 0
+        for: 0m
+        labels: {severity: warning}
+        annotations: {summary: "位点保存失败（etcd 抖动/门槛拒绝）"}
+      - alert: GocdcDeadLetterUsed
+        expr: increase(gocdc_deadletter_total[10m]) > 0
+        for: 0m
+        labels: {severity: critical}
+        annotations: {summary: "DLQ 启用（逃生通道被使用，需排查 poison）"}
+      - alert: GocdcConvertErrors
+        expr: increase(gocdc_convert_errors_total[10m]) > 0
+        for: 0m
+        labels: {severity: warning}
+        annotations: {summary: "值转换异常（enum 越界/字符集/类型不支持）"}

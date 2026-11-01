@@ -1,0 +1,66 @@
+# gocdc CI（CNB）
+# 模板参考 edu.mall.*（tag_push 自动流水线），两处差异：
+#  1. 部署形态为 docker-compose 演示（16 §6）——只 build+push 镜像，无 TKE 部署段；
+#  2. 构建期禁止 go mod tidy（R15）：Dockerfile 内 GOFLAGS=-mod=readonly 强制，go.mod/go.sum 随源码入库。
+# 镜像 tag 约定与旧项目一致：tag 形如 dev-v1.2.3 → $REGISTRY/$SLUG/dev:v1.2.3。
+
+# 测试段：官方 golang:1.24（Debian 自带 gcc，-race 可跑）
+test: &test
+  image: golang:1.24
+  env:
+    GOPROXY: https://goproxy.cn,direct
+  script: |
+    go version
+    go build ./...
+    go vet ./...
+    go test ./... -race -count=1
+
+prepare: &prepare
+  script: |
+    CNB_BRANCH_ENV=${CNB_BRANCH%%-*}
+    CNB_VERSION=${CNB_BRANCH#*-}
+    IMAGE_TAG=${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}/${CNB_BRANCH_ENV}:${CNB_VERSION}
+    printf "##[set-output image_tag=%s]\n" "$IMAGE_TAG"
+  exports:
+    image_tag: IMAGE_TAG
+
+build_push: &build_push
+  script: |
+    echo "build_push image_tag: $IMAGE_TAG"
+    docker build -f deploy/Dockerfile \
+      --build-arg VERSION=${CNB_VERSION:-dev} \
+      --build-arg COMMIT=${CNB_COMMIT_SHORT:-unknown} \
+      -t "$IMAGE_TAG" .
+    docker push "$IMAGE_TAG"
+
+pipeline: &pipeline
+  name: gocdc-pipeline
+  services:
+    - docker
+  stages:
+    - name: frontend
+      image: node:22-alpine
+      script: |
+        cd web
+        npm ci
+        npm run typecheck
+        npm run lint
+        npm test
+        npm run build
+    - name: test
+      <<: *test
+    - name: vulncheck
+      image: golang:1.24
+      env:
+        GOPROXY: https://goproxy.cn,direct
+      script: |
+        go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+    - name: prepare
+      <<: *prepare
+    - name: build push
+      jobs:
+        <<: *build_push
+
+$:
+  tag_push:
+    - <<: *pipeline

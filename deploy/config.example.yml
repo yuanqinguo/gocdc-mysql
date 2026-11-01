@@ -1,0 +1,58 @@
+# gocdc 示例配置（YAML）。字段全集见 internal/config/README.md。
+# 密码仅用于演示，生产用 ${ENV} 占位注入（03 §3.2）。
+cluster: demo
+
+source:
+  addr: "mysql-src:3306"
+  user: root
+  password: 123456
+  charset: utf8mb4
+  flavor: mysql
+  server_id: 99001
+  timezone: Asia/Shanghai
+  heartbeat_interval_ms: 3000
+  read_timeout_ms: 60000
+  exclude_schemas: [mysql, sys, information_schema, performance_schema]
+
+node: { id: "", advertise_addr: "" }
+ha: { lease_ttl_seconds: 10, leader_check_interval_ms: 2000, resign_on_shutdown: true }
+
+pipeline:
+  workers: 4
+  worker_queue_size: 8192
+  batch_size: 500
+  flush_interval_ms: 200
+  position_save_interval_ms: 3000
+
+targets:
+  mysql:
+    enabled: true
+    addr: "mysql-dst:3306"
+    user: root
+    password: 123456
+    charset: utf8mb4
+    max_open_conns: 20
+    max_idle_conns: 5
+    conn_max_lifetime_min: 30
+    tx_chunk_rows: 500
+    ddl_sync: true
+
+rules:
+  # 组形态白名单（唯一形态）：sinks/ddl_policy 组级统一，表清单逐表列出，
+  # 未列入的表不同步（表级可用字段 target_database/exclude_columns/mask_columns，
+  # 详见 internal/config/README.md §6）
+  - schema: demo
+    sinks: { mysql: true }
+    ddl_policy: auto
+    tables:
+      - { table: orders, order_by_column: id, do_stock: true }
+
+observability:
+  metrics_addr: ":9595"
+  web:
+    enabled: true
+    addr: ":8060"
+    username: admin
+    password: ${WEB_PASSWORD}
+    auth_disabled: false
+  log: { level: info, json: false }

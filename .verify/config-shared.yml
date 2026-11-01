@@ -1,0 +1,94 @@
+# L3 验证环境节点 1 配置（YAML，2026-10-30 配置格式决策后首验）
+config_version: 2
+cluster: verify
+
+# 新引导协议：协调面 etcd 写在 bootstrap 段（file 形态引导文件）
+bootstrap:
+  config_source: file
+  etcd_addrs:
+    - 127.0.0.1:12379
+
+source:
+  addr: 127.0.0.1:13306
+  user: root
+  password: 123456
+  charset: utf8mb4
+  flavor: mysql
+  timezone: UTC
+  heartbeat_interval_ms: 3000
+  read_timeout_ms: 60000
+  exclude_schemas: [mysql, sys, information_schema, performance_schema]
+  use_gtid: true
+
+node:
+
+ha:
+  lease_ttl_seconds: 10
+  leader_check_interval_ms: 2000
+  resign_on_shutdown: true
+
+pipeline:
+  workers: 4
+  worker_queue_size: 8192
+  batch_size: 500
+  flush_interval_ms: 200
+  position_save_interval_ms: 3000
+
+targets:
+  mysql:
+    enabled: true
+    addr: 127.0.0.1:13307
+    user: root
+    password: 123456
+    charset: utf8mb4
+    max_open_conns: 20
+    max_idle_conns: 5
+    conn_max_lifetime_min: 30
+    tx_chunk_rows: 500
+    ddl_sync: true
+  rocketmq:
+    enabled: true
+    name_servers: [127.0.0.1:8081]
+    group: gocdc-verify
+    topic_prefix: "CDC_"
+    order_by: row
+    send_timeout_ms: 5000
+
+rules:
+  - schema: shop
+    order_by_column: id
+    do_stock: true
+    exclude_tables: [tmp_log]
+    mask_columns:
+      phone: phone
+    sinks: {mysql: true}
+  - schema: types
+    table: all_types
+    do_stock: true
+    ddl_policy: auto
+    order_by_column: id
+    sinks: {mysql: true}
+  - schema: biz2
+    do_stock: false
+    sinks: {mysql: true}
+  - schema: rmqtest
+    do_stock: true
+    ddl_policy: auto
+    order_by_column: id
+    sinks: {mysql: true, rocketmq: true}
+  - schema: cluster_e2e
+    do_stock: true
+    order_by_column: id
+    sinks: {mysql: true}
+
+observability:
+  metrics_addr: ":9595"
+  web:
+    enabled: true
+    addr: ":8060"
+    username: admin
+    password: ${WEB_PASSWORD}
+    auth_disabled: false
+  log:
+    level: info
+    json: false

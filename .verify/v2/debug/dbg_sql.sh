@@ -1,0 +1,13 @@
+#!/bin/bash
+SRC="docker exec vf-src mysql -uroot -p123456 -h127.0.0.1 --default-character-set=utf8mb4"
+echo "=== E9 CREATE 手动执行（带错误输出）"
+$SRC -e "CREATE TABLE shop.e9_probe (id BIGINT NOT NULL AUTO_INCREMENT, v VARCHAR(32) NULL, PRIMARY KEY (id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+echo "create exit=$?"
+echo "=== I5 INSERT 手动执行（带错误输出）"
+$SRC -e "INSERT INTO rmqtest.msg (name,qty,amount,note) SELECT CONCAT('i5x-',n), n, n, 'i5x' FROM (WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM s WHERE n<10) SELECT n) t"
+echo "insert exit=$?"
+$SRC -N -e "SELECT COUNT(*) FROM rmqtest.msg"
+$SRC -e "DROP TABLE IF EXISTS shop.e9_probe"
+$SRC -e "DELETE FROM rmqtest.msg WHERE name LIKE 'i5x-%'"
+echo "=== 复现 wipe_data 里的单引号执行"
+$SRC -e "TRUNCATE rmqtest.msg"

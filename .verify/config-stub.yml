@@ -1,0 +1,9 @@
+# 生产引导桩：全量配置在配置中心 etcd(12380)，协调面 etcd(12379) 独立实例
+cluster: verify
+
+bootstrap:
+  config_source: etcd
+  config_center:
+    etcd_addrs: [127.0.0.1:12380]
+  etcd_addrs:
+    - 127.0.0.1:12379

@@ -1,0 +1,63 @@
+# A2 坏配置：17 处独立错误（配置校验不短路完整清单）
+config_version: 3              # 错1: 须为 2
+cluster: verify                # 错2: 与 -cluster verify2 不一致（启动时传 flag）
+
+bootstrap:
+  config_source: file
+  etcd_addrs: [127.0.0.1:12379]
+
+source:
+  addr: ""                     # 错3: 不能为空
+  user: ""                     # 错4: 不能为空
+  password: 123456
+  charset: ""                  # 错5: 不能为空
+  flavor: oracle               # 错6: 须为 mysql|mariadb
+  server_id: 0                 # 错7: 须为 1..4294967295
+  timezone: ""                 # 错8: 必须显式化
+  exclude_schemas: [mysql, sys, information_schema]  # 错9: 缺 performance_schema
+
+ha:
+  lease_ttl_seconds: 1         # 错10: 须 ≥2
+  leader_check_interval_ms: 0  # 错11: 须 >0
+  resign_on_shutdown: true
+
+pipeline:
+  workers: 0                   # 错12: 须 1..64
+  worker_queue_size: 8192
+  batch_size: 0                # 错13: 须 ≥1
+  flush_interval_ms: 200
+  position_save_interval_ms: 3000
+  on_convert_error: bogus      # 错14: 须 null|zero|fail_event
+  decimal_as: int              # 错15: 须 string|float
+
+targets:
+  mysql:
+    enabled: true
+    addr: 127.0.0.1:13307
+    user: root
+    password: 123456
+    charset: utf8mb4
+    ddl_sync: true
+  rocketmq:
+    enabled: true
+    name_servers: [127.0.0.1:8081]
+    group: gocdc-verify
+    topic_prefix: "CDC."       # 错16: 含点不匹配 ^[a-zA-Z0-9_-]{1,255}$
+    order_by: row
+
+rules:
+  - schema: shop
+    order_by_column: id
+    do_stock: true
+    sinks: {mysql: true}
+
+observability:
+  metrics_addr: ":9595"
+  web:
+    enabled: true
+    addr: ":8060"
+    username: admin
+    password: demo123          # 错17 由上面凑数的16处+此处保留合法——见实际输出计数
+    auth_disabled: false
+  log:
+    level: info

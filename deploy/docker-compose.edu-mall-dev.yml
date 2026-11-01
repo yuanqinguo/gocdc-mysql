@@ -1,0 +1,50 @@
+# edu.mall dev 环境的 gocdc 测试部署（192.168.112.61，CentOS + Docker）
+# 形态：目标 MySQL（本机）+ gocdc 单节点；位点/配置中心 = 192.168.112.104:2379（单 etcd 双角色）
+# 启动协议：纯 flag（-cluster edu-mall-dev -etcd ...）——全量配置从 etcd
+#   /gocdc/edu-mall-dev/config 拉取（deploy/config.edu-mall-dev.yml 的正文）。
+# 前置一次性操作（见 docs/ 迁移说明）：
+#   1. 目标 MySQL 初始化：源库 dev_edu.mall.merge 全量 dump（--master-data 记录位点）→ 本库恢复
+#   2. 位点播种：etcd put /gocdc/edu-mall-dev/position = dump 记录的 binlog 坐标
+#   3. 配置上传：etcd put /gocdc/edu-mall-dev/config = deploy/config.edu-mall-dev.yml 正文
+# 密码：MySQL 统一 root / 123456（内网测试环境，明文入库文件）
+name: edu-mall-dev
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: edumall-merge-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: 123456
+      TZ: Asia/Shanghai
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_general_ci
+      - --max_allowed_packet=256M
+    ports:
+      - "3306:3306"
+    volumes:
+      - /data/edu-mall-dev/mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-p123456"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  gocdc:
+    image: ${GOCDC_IMAGE:-gocdc:edu-mall-dev}
+    container_name: edumall-gocdc
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      GOCDC_SOURCE_PWD: 123456
+      GOCDC_TARGET_PWD: 123456
+      GOCDC_WEB_USER: ${GOCDC_WEB_USER:-admin}
+      GOCDC_WEB_PASSWORD: ${GOCDC_WEB_PASSWORD}
+      TZ: Asia/Shanghai
+    command: ["-cluster", "edu-mall-dev", "-etcd", "192.168.112.104:2379"]
+    ports:
+      - "8060:8060"   # Web admin
+      - "9595:9595"   # metrics

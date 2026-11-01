@@ -1,0 +1,10 @@
+# golangci-lint 配置。
+# 启用清单按 docs/arch/17-coding-playbook.md §8：errcheck/staticcheck/govet/revive。
+# 采用 v2 配置格式（golangci-lint >= v2.0；若改用 v1.6x 需去掉 version 字段）。
+version: "2"
+
+linters:
+  # standard = errcheck + govet + staticcheck
+  default: standard
+  enable:
+    - revive

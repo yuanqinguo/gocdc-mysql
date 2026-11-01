@@ -1,0 +1,87 @@
+# 高优先级 case 全量配置（存入配置中心 etcd 12380 的 /gocdc/verify/config）
+config_version: 2
+cluster: verify-single
+
+source:
+  addr: 127.0.0.1:13306
+  user: root
+  password: 123456
+  charset: utf8mb4
+  flavor: mysql
+  timezone: UTC
+  heartbeat_interval_ms: 3000
+  read_timeout_ms: 60000
+  exclude_schemas: [mysql, sys, information_schema, performance_schema]
+  use_gtid: true
+  # node.id / server_id 均缺省：node.id 派生、server_id 按 node.id 派生
+
+ha:
+  enabled: false
+  lease_ttl_seconds: 10
+  leader_check_interval_ms: 2000
+  resign_on_shutdown: true
+
+pipeline:
+  workers: 4
+  worker_queue_size: 8192
+  batch_size: 500
+  flush_interval_ms: 200
+  position_save_interval_ms: 3000
+
+targets:
+  mysql:
+    enabled: true
+    addr: 127.0.0.1:13307
+    user: root
+    password: 123456
+    charset: utf8mb4
+    max_open_conns: 20
+    max_idle_conns: 5
+    conn_max_lifetime_min: 30
+    tx_chunk_rows: 500
+    ddl_sync: true
+  rocketmq:
+    enabled: true
+    name_servers: [127.0.0.1:8081]
+    group: gocdc-hiprio
+    topic_prefix: "CDC_"
+    order_by: row
+    send_timeout_ms: 5000
+
+rules:
+  # 带点库名 + 规则级 target_database 覆盖（非同名目标库 edu.mall.merge）+ RMQ 双写
+  - schema: edu.mall.admin
+    table: users
+    do_stock: true
+    ddl_policy: auto
+    order_by_column: id
+    target_database: edu.mall.merge
+    sinks: {mysql: true, rocketmq: true}
+  # 既有回归表（保持位点连续性）
+  - schema: shop
+    order_by_column: id
+    do_stock: false
+    exclude_tables: [tmp_log]
+    mask_columns:
+      phone: phone
+    sinks: {mysql: true}
+  - schema: rmqtest
+    do_stock: false
+    ddl_policy: auto
+    order_by_column: id
+    sinks: {mysql: true, rocketmq: true}
+  - schema: cluster_e2e
+    do_stock: false
+    order_by_column: id
+    sinks: {mysql: true}
+
+observability:
+  metrics_addr: ":9597"
+  web:
+    enabled: true
+    addr: ":8062"
+    username: admin
+    password: demo123
+    auth_disabled: false
+  log:
+    level: info

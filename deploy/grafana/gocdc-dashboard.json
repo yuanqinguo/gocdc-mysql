@@ -1,0 +1,49 @@
+{
+  "title": "gocdc CDC 管线",
+  "uid": "gocdc-overview",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "30s",
+  "panels": [
+    {"type": "stat", "title": "Leader 状态", "gridPos": {"x":0,"y":0,"w":4,"h":4},
+     "targets": [{"expr": "gocdc_leader_state"}]},
+    {"type": "stat", "title": "事件延迟 (s)", "gridPos": {"x":4,"y":0,"w":4,"h":4},
+     "targets": [{"expr": "gocdc_event_lag_seconds"}],
+     "fieldConfig": {"defaults": {"thresholds": {"steps": [
+        {"color":"green","value":null},{"color":"yellow","value":30},{"color":"red","value":300}]}}}},
+    {"type": "stat", "title": "位点滞后 (s)", "gridPos": {"x":8,"y":0,"w":4,"h":4},
+     "targets": [{"expr": "gocdc_position_lag_seconds"}]},
+    {"type": "stat", "title": "与源库字节差", "gridPos": {"x":12,"y":0,"w":4,"h":4},
+     "targets": [{"expr": "gocdc_master_position_lag_bytes"}]},
+    {"type": "stat", "title": "暂停规则", "gridPos": {"x":16,"y":0,"w":4,"h":4},
+     "targets": [{"expr": "sum(gocdc_pipeline_paused)"}],
+     "fieldConfig": {"defaults": {"thresholds": {"steps": [
+        {"color":"green","value":null},{"color":"red","value":1}]}}}},
+    {"type": "stat", "title": "DLQ 事件(应≈0)", "gridPos": {"x":20,"y":0,"w":4,"h":4},
+     "targets": [{"expr": "sum(gocdc_deadletter_total)"}]},
+
+    {"type": "timeseries", "title": "吞吐（各 sink，5m 速率）", "gridPos": {"x":0,"y":4,"w":12,"h":8},
+     "targets": [{"expr": "sum by (sink) (rate(gocdc_events_out_total[5m]))"}]},
+    {"type": "timeseries", "title": "事件进入（按类型）", "gridPos": {"x":12,"y":4,"w":12,"h":8},
+     "targets": [{"expr": "sum by (type) (rate(gocdc_events_in_total[5m]))"}]},
+
+    {"type": "timeseries", "title": "sink 批次耗时 p95", "gridPos": {"x":0,"y":12,"w":8,"h":8},
+     "targets": [{"expr": "histogram_quantile(0.95, sum by (le, sink) (rate(gocdc_sink_batch_duration_seconds_bucket[5m])))"}]},
+    {"type": "timeseries", "title": "队列深度（背压前兆）", "gridPos": {"x":8,"y":12,"w":8,"h":8},
+     "targets": [{"expr": "sum by (worker) (gocdc_worker_queue_depth)"}]},
+    {"type": "timeseries", "title": "投递失败与重试", "gridPos": {"x":16,"y":12,"w":8,"h":8},
+     "targets": [{"expr": "sum by (sink, reason) (rate(gocdc_events_failed_total[5m]))"},
+                 {"expr": "rate(gocdc_sink_retry_total[5m])"}]},
+
+    {"type": "stat", "title": "全量进度", "gridPos": {"x":0,"y":20,"w":6,"h":4},
+     "targets": [{"expr": "gocdc_stock_progress_ratio"}]},
+    {"type": "stat", "title": "位点保存失败", "gridPos": {"x":6,"y":20,"w":6,"h":4},
+     "targets": [{"expr": "increase(gocdc_position_save_failures_total[10m])"}],
+     "fieldConfig": {"defaults": {"thresholds": {"steps": [
+        {"color":"green","value":null},{"color":"red","value":1}]}}}},
+    {"type": "stat", "title": "转换异常 (10m)", "gridPos": {"x":12,"y":20,"w":6,"h":4},
+     "targets": [{"expr": "increase(gocdc_convert_errors_total[10m])"}]},
+    {"type": "stat", "title": "消息超限 (10m)", "gridPos": {"x":18,"y":20,"w":6,"h":4},
+     "targets": [{"expr": "increase(gocdc_message_oversize_total[10m])"}]}
+  ]
+}

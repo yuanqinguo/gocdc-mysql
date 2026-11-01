@@ -1,0 +1,95 @@
+# v2 主配置正文（写入配置中心 /gocdc/verify/config，node1+node2 共享同一份）
+# 与上轮 config-node1/2.yml 的唯一差异：端口走 ${ENV}（共享配置多副本形态）、
+# node.id/server_id 缺省（派生）——这正是 etcd 配置中心模式下的生产形态。
+# 2026-10-31 适配组规则形态（旧平铺形态已整体移除）：
+#   - 白名单逐表列出（未列表=不同步，tmp_log 即白名单外的等价物）；
+#   - 表级 do_stock 必填、mask_columns 归表级；order/adv13t/dying_table 为
+#     对抗 case 专用白名单表（lib.sh wipe_data 双端预建）。
+config_version: 2
+cluster: verify
+
+source:
+  addr: 127.0.0.1:13306
+  user: root
+  password: "123456"
+  charset: utf8mb4
+  flavor: mysql
+  timezone: UTC
+  heartbeat_interval_ms: 3000
+  read_timeout_ms: 60000
+  exclude_schemas: [mysql, sys, information_schema, performance_schema]
+  use_gtid: true
+
+ha:
+  lease_ttl_seconds: 10
+  leader_check_interval_ms: 2000
+  resign_on_shutdown: true
+
+pipeline:
+  workers: 4
+  worker_queue_size: 8192
+  batch_size: 500
+  flush_interval_ms: 200
+  position_save_interval_ms: 3000
+
+targets:
+  mysql:
+    enabled: true
+    addr: 127.0.0.1:13307
+    user: root
+    password: "123456"
+    charset: utf8mb4
+    max_open_conns: 20
+    max_idle_conns: 5
+    conn_max_lifetime_min: 30
+    tx_chunk_rows: 500
+    ddl_sync: true
+  rocketmq:
+    enabled: true
+    name_servers: [127.0.0.1:8081]
+    group: gocdc-verify
+    topic_prefix: "CDC_"
+    order_by: row
+    send_timeout_ms: 5000
+
+rules:
+  - schema: shop
+    sinks: {mysql: true}
+    tables:
+      - {table: orders, do_stock: true, order_by_column: id}
+      - {table: order_items, do_stock: true, order_by_column: order_id}
+      - {table: users, do_stock: true, order_by_column: id, mask_columns: {phone: phone}}
+      - {table: new_table, do_stock: true, order_by_column: id}
+      - {table: order, do_stock: true, order_by_column: id}
+      - {table: adv13t, do_stock: true, order_by_column: id}
+      - {table: dying_table, do_stock: true, order_by_column: id}
+  - schema: types
+    ddl_policy: auto
+    sinks: {mysql: true}
+    tables:
+      - {table: all_types, do_stock: true, order_by_column: id}
+  - schema: biz2
+    sinks: {mysql: true}
+    tables:
+      - {table: events, do_stock: false}
+  - schema: rmqtest
+    ddl_policy: auto
+    sinks: {mysql: true, rocketmq: true}
+    tables:
+      - {table: msg, do_stock: true, order_by_column: id}
+  - schema: cluster_e2e
+    sinks: {mysql: true}
+    tables:
+      - {table: tab, do_stock: true, order_by_column: id}
+
+observability:
+  metrics_addr: ${METRICS_ADDR}
+  web:
+    enabled: true
+    addr: ${WEB_ADDR}
+    username: admin
+    password: ${WEB_PASSWORD}
+    auth_disabled: false
+  log:
+    level: info
+    json: false

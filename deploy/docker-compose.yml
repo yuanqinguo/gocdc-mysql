@@ -1,0 +1,114 @@
+# gocdc 集群演示（docker-compose）
+#
+# 单节点运行（默认）：
+#   cd deploy && docker compose up -d
+# 集群演示（双节点选主）：
+#   cd deploy && docker compose --profile cluster up -d
+#
+# 演示配置用 -config-file 挂载（03 §3.1 开发模式；位点/选举仍走 etcd）。
+# 生产形态：配置写入 etcd（{prefix}/config），二进制只给 -cluster/-etcd。
+name: gocdc-demo
+
+services:
+  etcd:
+    image: ${ETCD_IMAGE:-docker.cnb.cool/qingflyfei/edu.image.base:etcd-3.5.16}
+    command:
+      - etcd
+      - --name=etcd0
+      - --advertise-client-urls=http://etcd:2379
+      - --listen-client-urls=http://0.0.0.0:2379
+    ports:
+      - "2379:2379"
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health", "--endpoints=http://127.0.0.1:2379"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  # 源库：开启 ROW binlog（14 §2 源端要求）
+  mysql-src:
+    image: ${MYSQL_IMAGE:-mysql:8.0}
+    command:
+      - --server-id=1
+      - --log-bin=binlog
+      - --binlog-format=ROW
+      - --binlog-row-image=FULL
+    environment:
+      MYSQL_ROOT_PASSWORD: 123456
+    ports:
+      - "13306:3306"
+    volumes:
+      - src-data:/var/lib/mysql
+      - ./init-src.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-p123456"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # 目标库
+  mysql-dst:
+    image: ${MYSQL_IMAGE:-mysql:8.0}
+    environment:
+      MYSQL_ROOT_PASSWORD: 123456
+    ports:
+      - "13307:3306"
+    volumes:
+      - dst-data:/var/lib/mysql
+      - ./init-dst.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-p123456"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  gocdc-1:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: ${GOCDC_IMAGE:-gocdc:demo}
+    command: ["-cluster", "demo", "-etcd", "etcd:2379", "-config-file", "/data/wwwRoot/config.yml"]
+    environment:
+      WEB_PASSWORD: demo123
+    volumes:
+      - ./config.example.yml:/data/wwwRoot/config.yml:ro
+    ports:
+      - "9595:9595"
+    depends_on:
+      etcd:
+        condition: service_healthy
+      mysql-src:
+        condition: service_healthy
+      mysql-dst:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9595/healthz || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # 第二节点：仅集群演示时加入（--profile cluster）
+  gocdc-2:
+    image: ${GOCDC_IMAGE:-gocdc:demo}
+    profiles: ["cluster"]
+    command: ["-cluster", "demo", "-etcd", "etcd:2379", "-config-file", "/data/wwwRoot/config.yml"]
+    environment:
+      WEB_PASSWORD: demo123
+    volumes:
+      - ./config.example.yml:/data/wwwRoot/config.yml:ro
+    ports:
+      - "9596:9595"
+    depends_on:
+      etcd:
+        condition: service_healthy
+      gocdc-1:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9595/healthz || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  src-data:
+  dst-data:
