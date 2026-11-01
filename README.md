@@ -14,8 +14,8 @@
   <img src="https://img.shields.io/badge/Go-1.24%2B-00ADD8?logo=go&logoColor=white" alt="Go 1.24+">
   <img src="https://img.shields.io/badge/MySQL-5.7%20%2F%208.x%20%2F%20MariaDB-4479A1?logo=mysql&logoColor=white" alt="MySQL">
   <!-- TODO: uncomment once GitHub Actions CI + releases exist
-  <a href="https://github.com/qingflyfei/gocdc-mysql/actions/workflows/ci.yml"><img src="https://github.com/qingflyfei/gocdc-mysql/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <img src="https://img.shields.io/github/v/release/qingflyfei/gocdc-mysql" alt="Release">
+  <a href="https://github.com/yuanqinguo/gocdc-mysql/actions/workflows/ci.yml"><img src="https://github.com/yuanqinguo/gocdc-mysql/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <img src="https://img.shields.io/github/v/release/yuanqinguo/gocdc-mysql" alt="Release">
   -->
 </p>
 
@@ -57,7 +57,7 @@ lightweight middle ground:
 Prereqs: Docker with Compose. That's it.
 
 ```bash
-git clone --depth 1 https://github.com/qingflyfei/gocdc-mysql.git
+git clone --depth 1 https://github.com/yuanqinguo/gocdc-mysql.git
 cd gocdc-mysql/deploy
 docker compose up -d          # etcd + MySQL(source) + MySQL(target) + gocdc
 docker compose ps             # wait until healthy
