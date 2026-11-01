@@ -50,13 +50,3 @@ sink 配置变更 + 暂停 → 切换 → 恢复。位点不受影响。
 
 ## 8. 发布前置检查
 无暂停规则；lag < 阈值；旧实例已停（server_id 冲突互踢）。
-
-## 9. 迁移（自 go-mysql-transfer）
-1. 轮换旧系统全部明文凭据。
-2. **人工编写新配置**（参照 deploy/config.example.yml + docs/arch/03 §3.2 字段表：
-   旧 mysql_database 聚合语义 → 库级规则 + `target_database`；密码一律 `${ENV}`
-   占位）→ 写入 etcd config key。逐表核对目标表结构是必做步骤，工具不代劳。
-3. 停旧实例取最终位点（`SHOW BINARY LOG STATUS` 或 bbolt 导出）→ Web
-   `POST /api/v1/position`（confirm=SET-POSITION）播种（见 §1）。
-4. 影子运行 ≥3 天（对账抽样：Web `POST /api/v1/verify?confirm=true`
-   body `{"database":"...","table":"...","sample":100}`）→ 切换 → 观察一周。

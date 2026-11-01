@@ -221,7 +221,7 @@ follower 侧：
 ```
 
 - `position_key` 配置项（默认 `{prefix}/position`）满足「可配置 key 存储」需求；不同集群可指向同一路径做迁移。
-- **兼容迁移**：位点播种经 Web `POST /api/v1/position`（confirm=SET-POSITION）或 etcdctl 写位点 key。无 CLI 迁移命令（运维统一走 Web）。
+- **存量位点播种**：位点经 Web `POST /api/v1/position`（confirm=SET-POSITION）或 etcdctl 写位点 key。无 CLI 命令（运维统一走 Web）。
 
 ### 5.2 保存协议
 

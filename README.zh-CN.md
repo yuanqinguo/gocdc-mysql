@@ -113,18 +113,18 @@ docker compose stop gocdc-1                       # 杀掉 leader
 
 ## 与同类工具对比
 
-| | **gocdc** | canal | Debezium | go-mysql-transfer |
-|---|---|---|---|---|
-| 语言 / 运行时 | Go 单二进制 | Java（JVM） | Java（Kafka Connect） | Go 单二进制 |
-| HA 与故障接管 | etcd 选主，自动接管 ≤ TTL+10s，零丢失 | 基于 ZooKeeper | Kafka Connect 分布式 | ZK/etcd，选举存在已知缺陷 |
-| MySQL → MySQL 直写 | ✅ 幂等 upsert | 需另装 adapter | 需 sink connector | ✅ |
-| Kafka / RocketMQ | ✅ 双支持，按主键有序 | ✅ | 原生 Kafka | ✅ |
-| DDL 处理 | 审批流 / 白名单自动 | 通知，下游人工 | schema history topic | 人工 / 能力有限 |
-| 内置字段脱敏 | ✅ 快照+增量一致 | ✗ | SMT（基础） | ✗ |
-| 管线 | 并行分片 + 水位线 | 单实例单管线 | connector task | 单线程 |
-| 对账校验 | ✅ 内置 API | ✗ | ✗ | ✗ |
-| Web 控制台 | ✅ 内嵌 | 独立 admin 应用 | 外部 UI | 基础 |
-| 状态 | 活跃开发中 | 成熟 | 成熟 | 基本停更 |
+| | **gocdc** | canal | Debezium |
+|---|---|---|---|
+| 语言 / 运行时 | Go 单二进制 | Java（JVM） | Java（Kafka Connect） |
+| HA 与故障接管 | etcd 选主，自动接管 ≤ TTL+10s，零丢失 | 基于 ZooKeeper | Kafka Connect 分布式 |
+| MySQL → MySQL 直写 | ✅ 幂等 upsert | 需另装 adapter | 需 sink connector |
+| Kafka / RocketMQ | ✅ 双支持，按主键有序 | ✅ | 原生 Kafka |
+| DDL 处理 | 审批流 / 白名单自动 | 通知，下游人工 | schema history topic |
+| 内置字段脱敏 | ✅ 快照+增量一致 | ✗ | SMT（基础） |
+| 管线 | 并行分片 + 水位线 | 单实例单管线 | connector task |
+| 对账校验 | ✅ 内置 API | ✗ | ✗ |
+| Web 控制台 | ✅ 内嵌 | 独立 admin 应用 | 外部 UI |
+| 状态 | 活跃开发中 | 成熟 | 成熟 |
 
 需要流式 SQL 变换或超大规模 exactly-once？那是 Flink CDC 的领域——一个完整的
 流计算集群。gocdc 定位在轻量单二进制这一端。
@@ -160,7 +160,7 @@ docker compose stop gocdc-1                       # 杀掉 leader
 
 | 文档 | 内容 |
 |------|------|
-| [docs/GUIDE.md](docs/GUIDE.md) | 完整使用指导：源/目标库要求、全字段配置、部署形态、DDL 处理、MQ topic、go-mysql-transfer 迁移、生产 checklist、FAQ |
+| [docs/GUIDE.md](docs/GUIDE.md) | 完整使用指导：源/目标库要求、全字段配置、部署形态、DDL 处理、MQ topic、生产 checklist、FAQ |
 | [docs/RUNBOOK.md](docs/RUNBOOK.md) | 运维手册：位点回拨、重跑全量、故障演练、etcd 故障、DDL 审批 |
 | [docs/arch/](docs/arch/README.md) | 11 篇设计文档：管线并行、投递语义、快照协议、DDL 策略、背压、可观测性 |
 | [deploy/README.md](deploy/README.md) | 演示拓扑与验证命令 |

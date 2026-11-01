@@ -121,18 +121,18 @@ docker compose stop gocdc-1                       # kill the leader
 
 ## How it compares
 
-| | **gocdc** | canal | Debezium | go-mysql-transfer |
-|---|---|---|---|---|
-| Language / runtime | Go, single binary | Java (JVM) | Java (Kafka Connect) | Go, single binary |
-| HA & failover | etcd election, auto takeover ≤ TTL+10s, zero-loss | ZooKeeper-based | Kafka Connect distributed | ZK/etcd based, known election defects |
-| MySQL → MySQL direct write | ✅ idempotent upsert | via separate adapter | via sink connector | ✅ |
-| Kafka / RocketMQ | ✅ both, PK-ordered | ✅ | Kafka native | ✅ |
-| DDL handling | pause + approval flow / auto whitelist | notify, manual downstream | schema history topic | manual / limited |
-| Built-in field masking | ✅ snapshot + binlog | ✗ | SMT (basic) | ✗ |
-| Pipeline | parallel, table-sharded + watermark | single pipeline per instance | connector tasks | single-threaded |
-| Reconciliation check | ✅ built-in API | ✗ | ✗ | ✗ |
-| Web console | ✅ embedded | separate admin app | external UIs | basic |
-| Status | active development | mature | mature | development inactive |
+| | **gocdc** | canal | Debezium |
+|---|---|---|---|
+| Language / runtime | Go, single binary | Java (JVM) | Java (Kafka Connect) |
+| HA & failover | etcd election, auto takeover ≤ TTL+10s, zero-loss | ZooKeeper-based | Kafka Connect distributed |
+| MySQL → MySQL direct write | ✅ idempotent upsert | via separate adapter | via sink connector |
+| Kafka / RocketMQ | ✅ both, PK-ordered | ✅ | Kafka native |
+| DDL handling | pause + approval flow / auto whitelist | notify, manual downstream | schema history topic |
+| Built-in field masking | ✅ snapshot + binlog | ✗ | SMT (basic) |
+| Pipeline | parallel, table-sharded + watermark | single pipeline per instance | connector tasks |
+| Reconciliation check | ✅ built-in API | ✗ | ✗ |
+| Web console | ✅ embedded | separate admin app | external UIs |
+| Status | active development | mature | mature |
 
 Need stream-SQL transforms or exactly-once at massive scale? That's the Flink
 CDC territory — a full streaming-compute cluster. gocdc targets the lightweight
@@ -170,7 +170,7 @@ single-binary end of the spectrum.
 
 | Doc | Contents |
 |-----|----------|
-| [docs/GUIDE.md](docs/GUIDE.md) (中文) | Full user guide: source/target requirements, every config field, deployment topologies, DDL handling, MQ topics, migration from go-mysql-transfer, production checklist, FAQ |
+| [docs/GUIDE.md](docs/GUIDE.md) (中文) | Full user guide: source/target requirements, every config field, deployment topologies, DDL handling, MQ topics, production checklist, FAQ |
 | [docs/RUNBOOK.md](docs/RUNBOOK.md) (中文) | Operations runbook: position rewind, restock, failover drills, etcd failures, DDL approvals |
 | [docs/arch/](docs/arch/README.md) (中文) | 11 design documents: pipeline parallelism, delivery semantics, snapshot protocol, DDL strategy, backpressure, observability |
 | [deploy/README.md](deploy/README.md) | Demo topology and verification commands |

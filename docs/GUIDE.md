@@ -1,7 +1,6 @@
 # gocdc 使用指导（从零上手）
 
-> 面向读者：第一次接触 gocdc 的运维/开发，或从 go-mysql-transfer
-> 迁移过来的维护者。照本文可以完成：源库/目标库准备 → 单点或集群启动 → MySQL/Kafka/RocketMQ
+> 面向读者：第一次接触 gocdc 的运维/开发。照本文可以完成：源库/目标库准备 → 单点或集群启动 → MySQL/Kafka/RocketMQ
 > 下游配置 → DDL 审批 → 常用运维。
 >
 > 配套文档：[RUNBOOK.md](RUNBOOK.md)（故障处置动作）、[TESTCASES.md](TESTCASES.md)（验收清单）、docs/arch/（架构设计）。
@@ -372,65 +371,7 @@ RocketMQ 侧 message group 同样不收点：组键里的点替换为下划线�
 
 ---
 
-## 8. 从 go-mysql-transfer（app.yml）迁移
-
-> 迁移四步：**轮换凭据 → 翻译配置 → 播种位点 → 影子运行**。
-
-### 8.1 第一步：轮换旧凭据
-
-旧系统配置通常含明文密码（包括 root）——**先改掉那些密码**，再谈迁移。
-
-### 8.2 第二步：app.yml → config.yml 字段映射
-
-| 旧 app.yml | 新 config.yml | 说明 |
-|-----------|----------------|------|
-| `source: {host,port,user,password,charset,flavor,server_id}` | `source: {addr,user,password,charset,flavor,server_id}` | host+port 合并为 `addr`；password 改 `${ENV}` |
-| `source: {binlog_position, binlog_name}` | 不迁移——走位点播种（§8.3） | 位点由 etcd 管理 |
-| `target: {type: MYSQL, host, port, ...}` | `targets.mysql: {enabled:true, addr, ...}` | |
-| `target: {type: MYSQL, mysql_database}`（规则级目标库） | `rules[].target_database`（库级/表级均可；省略=同名） | 解析序：规则级 > `targets.mysql.target_database` > 源库同名 |
-| `rules: {schema, table}` | `rules: [{schema, table}]` | 通配表 `table:"*"` 旧写法 → 留空即可（库级） |
-| `rules: {table_primary_column}` | `rules: {order_by_column}` | 主键正常时可不填 |
-| `rules: {mysql_table_name}` | **不支持**（同名同表强约束） | 异名表需在目标库建视图或改造 |
-| `rules: {column_mappings, column_lower_case/upper_case/underscore_to_camel, default_column_values}` | **不迁移** | 列级映射属历史遗留；人工核对目标表结构本来必做 |
-| `rules: {include_columns}` | **不支持**（用 `exclude_columns` 反向表达） | |
-| `rules: {lua: ...}` | **不迁移** | Lua 与 MySQL 直写本就不兼容 |
-| `rules: {value_elect_type, date_formatter, ...}` | **不迁移** | 新系统类型转换见 `pipeline.decimal_as/zero_datetime_as` |
-| `target: {type: KAFKA, servers, topic_prefix...}` | `targets.kafka: {...}` | 消息格式完全重做（event_id/pk/before/after），**消费端必须改造对接**（§7.3） |
-| `target: {type: ROCKETMQ, namesrv_hosts...}` | `targets.rocketmq: {name_servers}` | v5 gRPC 端口；topic 预建 FIFO |
-| `target: {type: REDIS / ELASTICSEARCH}` | **不支持** | 后续版本规划 |
-| `rules: {reserve_raw_data}` | 默认输出已含 before/after 全像 | 无需开关 |
-| 旧 etcd 模式（`-r` 单 key 拉配置） | `-config-key` 覆盖默认 key `/gocdc/{cluster}/config` | 配置 schema 不同，须重写 |
-
-**人工核对点**（迁移必做，工具不代劳）：逐表核对目标表结构与源表一致（列集/主键/唯一键）；
-规则里的脱敏/排除列在新 config 重新声明。
-
-### 8.3 第三步：播种位点（增量无缝续接）
-
-1. 停旧 transfer，取最终位点：`SHOW BINARY LOG STATUS`（或旧进程 bbolt 里的位点）。
-2. 播种到新系统（停机态执行最稳）：
-
-```bash
-# 方式 A：Web API（进程未启时用方式 B）
-curl -u admin:xxx -X POST -H 'Content-Type: application/json' \
-  -d '{"name":"binlog.000123","pos":45678,"confirm":"SET-POSITION"}' \
-  http://127.0.0.1:8060/api/v1/position
-# 方式 B：etcdctl 直接写
-etcdctl put /gocdc/prod/position '{"v":1,"name":"binlog.000123","pos":45678,"gtid_set":"uuid:1-99"}'
-```
-
-> GTID 用户：把 `use_gtid:true` 打开并把 `gtid_set` 一并播种；file:pos 与 gtid 二选一按 `use_gtid`。
-
-3. 若希望全量重导：不播种位点、给规则配 `do_stock:true` → 启动自动全量+增量衔接。
-
-### 8.4 第四步：影子运行（强烈建议）
-
-新系统与旧系统**并行跑 ≥3 天**（各自独立目标端或目标端容忍双写），
-每日抽样对账：`POST /api/v1/verify?confirm=true {"database":"...","table":"...","sample":100}`，
-mismatch=0 连续三天再切下游消费/流量。
-
----
-
-## 9. 常用运维速查
+## 8. 常用运维速查
 
 ```bash
 B="-u admin:xxx "; H="http://127.0.0.1:8060/api/v1"
@@ -453,7 +394,7 @@ curl http://127.0.0.1:9595/metrics                            # Prometheus 指�
 
 ---
 
-## 10. 生产最佳实践 checklist
+## 9. 生产最佳实践 checklist
 
 1. **GTID 开启**：源库 gtid_mode=ON + `use_gtid:true`——主从切换免手工修位点。
 2. **timezone 对齐**：`source.timezone` = 源库 `@@system_time_zone`；目标库会话时区与其一致。错了 TIMESTAMP 漂移 8 小时。
@@ -469,7 +410,7 @@ curl http://127.0.0.1:9595/metrics                            # Prometheus 指�
 12. **告警接入**：Grafana dashboard（deploy/grafana）+ 关键指标：`gocdc_leader_state`（无主）、
     `gocdc_pipeline_paused`（暂停）、`gocdc_master_position_lag_bytes`（积压）、`gocdc_position_save_failures_total`（位点写失败）。
 
-## 11. FAQ（对照真实验证结论）
+## 10. FAQ（对照真实验证结论）
 
 | 现象 | 原因与处置 |
 |------|-----------|
