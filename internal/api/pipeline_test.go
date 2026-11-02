@@ -14,11 +14,11 @@ func pipelineTestRouter(t *testing.T) (*ginEngine, *atomic.Int32, *atomic.Int32)
 	t.Helper()
 	deps, _ := testDeps()
 	var pauses, resumes atomic.Int32
-	deps.PausePipeline = func(context.Context) error {
+	defaultSD(deps).PausePipeline = func(context.Context) error {
 		pauses.Add(1)
 		return nil
 	}
-	deps.ResumePipeline = func(context.Context) error {
+	defaultSD(deps).ResumePipeline = func(context.Context) error {
 		resumes.Add(1)
 		return nil
 	}
@@ -81,7 +81,7 @@ func TestRouter_PipelineNotWired(t *testing.T) {
 
 func TestRouter_PipelinePauseError(t *testing.T) {
 	deps, _ := testDeps()
-	deps.PausePipeline = func(context.Context) error { return errors.New("本节点当前不承担管线") }
+	defaultSD(deps).PausePipeline = func(context.Context) error { return errors.New("本节点当前不承担管线") }
 	r := NewRouter(deps, AuthConfig{Username: "admin", Password: "pw"})
 
 	req := httptest.NewRequest("POST", "/api/v1/pipeline/pause?confirm=true", nil)

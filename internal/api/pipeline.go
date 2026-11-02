@@ -1,40 +1,58 @@
 package api
 
 import (
-	"errors"
-
 	"github.com/gin-gonic/gin"
 )
 
-// pausePipeline POST /api/v1/pipeline/pause：人工暂停管线（13 §3）——
-// cmd 层闭包写 etcd 持久标志并优雅停管线（保持 Leader 与 Web）；跨重启
-// 保持暂停直到显式 resume。非 leader 节点返回错误。
-func (h apiHandlers) pausePipeline(c *gin.Context) {
+// pausePipelineOf 源作用域人工暂停（13 §3 逐源版）——cmd 层闭包写该源 etcd
+// 持久标志并优雅停该源管线（保持 Leader 与 Web）；跨重启保持暂停直到显式
+// resume。非 leader 节点/源未承担返回错误。其余源不受影响。
+func (h apiHandlers) pausePipelineOf(sd *SourceDeps, c *gin.Context) {
 	if !requireConfirm(c) {
 		return
 	}
 	var err error
-	if h.PausePipeline != nil {
-		err = h.PausePipeline(c.Request.Context())
+	if sd.PausePipeline != nil {
+		err = sd.PausePipeline(c.Request.Context())
 	} else {
-		err = errors.New("暂停管线未装配")
+		err = errNotAssembly("暂停管线")
 	}
-	audit(auditOrNil(h.Audit), c, auditPipelinePause, "", err)
+	auditSource(auditOrNil(h.Audit), c, sd.ID, auditPipelinePause, "", err)
 	respondResult(c, err)
 }
 
-// resumePipeline POST /api/v1/pipeline/resume：恢复人工暂停的管线——
-// 删持久标志并从 etcd 位点重启全量/增量流程。
-func (h apiHandlers) resumePipeline(c *gin.Context) {
+// sourcePausePipeline POST /api/v1/sources/:sid/pipeline/pause。
+func (h apiHandlers) sourcePausePipeline(c *gin.Context) {
+	if sd := h.resolveSource(c); sd != nil {
+		h.pausePipelineOf(sd, c)
+	}
+}
+
+// legacyPausePipeline 兼容层 POST /pipeline/pause。
+func (h apiHandlers) legacyPausePipeline(c *gin.Context, sd *SourceDeps) { h.pausePipelineOf(sd, c) }
+
+// resumePipelineOf 源作用域恢复人工暂停——删该源持久标志并从该源 etcd 位点
+// 重启全量/增量流程。
+func (h apiHandlers) resumePipelineOf(sd *SourceDeps, c *gin.Context) {
 	if !requireConfirm(c) {
 		return
 	}
 	var err error
-	if h.ResumePipeline != nil {
-		err = h.ResumePipeline(c.Request.Context())
+	if sd.ResumePipeline != nil {
+		err = sd.ResumePipeline(c.Request.Context())
 	} else {
-		err = errors.New("恢复管线未装配")
+		err = errNotAssembly("恢复管线")
 	}
-	audit(auditOrNil(h.Audit), c, auditPipelineResume, "", err)
+	auditSource(auditOrNil(h.Audit), c, sd.ID, auditPipelineResume, "", err)
 	respondResult(c, err)
 }
+
+// sourceResumePipeline POST /api/v1/sources/:sid/pipeline/resume。
+func (h apiHandlers) sourceResumePipeline(c *gin.Context) {
+	if sd := h.resolveSource(c); sd != nil {
+		h.resumePipelineOf(sd, c)
+	}
+}
+
+// legacyResumePipeline 兼容层 POST /pipeline/resume。
+func (h apiHandlers) legacyResumePipeline(c *gin.Context, sd *SourceDeps) { h.resumePipelineOf(sd, c) }

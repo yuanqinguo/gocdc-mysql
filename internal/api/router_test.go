@@ -89,13 +89,37 @@ func (f *fakeGate) WaitDecision(ctx context.Context, id string) (string, error) 
 func testDeps() (Deps, *fakeGate) {
 	store := position.NewStore(nil, "/p", "", 0)
 	gate := &fakeGate{}
-	return Deps{
+	sd := &SourceDeps{
+		ID: config.DefaultSourceID, Store: store, Rules: mustRules(), Gate: gate,
+	}
+	deps := Deps{
 		Version: "test", Cluster: "c1", NodeID: "n1",
 		ConfigSrc: "file:test", StartedAt: time.Now(),
 		ConfigJSON: []byte(`{"masked":true}`),
-		Store:      store, Rules: mustRules(), Gate: gate,
-	}, gate
+		Sources:     map[string]*SourceDeps{config.DefaultSourceID: sd},
+		SourceOrder: []string{config.DefaultSourceID},
+	}
+	// /status 与 /sources 的装配层闭包（生产由 cmd 提供；测试从源快照闭包派生）
+	deps.SourceStatuses = func() []SourceStatus {
+		ss := SourceStatus{ID: sd.ID, Phase: "ready", PipelineState: PipeIdle, UseGTID: sd.UseGTID}
+		if sd.Pipeline != nil {
+			ps := sd.Pipeline()
+			ss.PipelineState, ss.PipelineError, ss.PipelineSince, ss.PausedByOp = ps.State, ps.Error, ps.Since, ps.PausedByOp
+			if ps.HasLag {
+				lag := ps.EventLag
+				ss.EventLagSeconds = &lag
+			}
+		}
+		return []SourceStatus{ss}
+	}
+	deps.SourceList = func() []SourceSummary {
+		return []SourceSummary{{ID: sd.ID, State: PipeIdle, Rules: 1, Tables: 1, Sinks: []string{"mysql"}}}
+	}
+	return deps, gate
 }
+
+// defaultSD 取 testDeps 的唯一源依赖（多字段变异用）。
+func defaultSD(deps Deps) *SourceDeps { return deps.Sources[config.DefaultSourceID] }
 
 func mustRules() *pipeline.CompiledRules {
 	doStock := true
@@ -123,7 +147,10 @@ func (nilDDLLister) PendingByTable(context.Context, string, string) ([]pipeline.
 type nilAuditSink struct{}
 
 func (nilAuditSink) appendAudit(string, string, string, time.Time) error { return nil }
-func (nilAuditSink) List(context.Context, int) ([]auditEntry, error)     { return nil, nil }
+func (nilAuditSink) appendAuditSource(string, string, string, string, time.Time) error {
+	return nil
+}
+func (nilAuditSink) List(context.Context, int) ([]auditEntry, error) { return nil, nil }
 
 func TestRouter_Auth(t *testing.T) {
 	r, _ := testRouter(t)
@@ -193,7 +220,7 @@ func TestRouter_StatusPipelineFields(t *testing.T) {
 
 	// 装配 paused → 透传错误与事件延迟
 	deps2, _ := testDeps()
-	deps2.Pipeline = func() PipelineSnapshot {
+	defaultSD(deps2).Pipeline = func() PipelineSnapshot {
 		return PipelineSnapshot{State: PipePaused, Error: "位点熔断", Since: time.Now(), EventLag: 42, HasLag: true}
 	}
 	data = fetch(deps2)
@@ -206,7 +233,7 @@ func TestRouter_StatusPipelineFields(t *testing.T) {
 
 	// 人工暂停快照 → paused_by_op=true（前端切换「恢复管线」入口的依据）
 	deps3, _ := testDeps()
-	deps3.Pipeline = func() PipelineSnapshot {
+	defaultSD(deps3).Pipeline = func() PipelineSnapshot {
 		return PipelineSnapshot{State: PipePaused, Error: "管线已被人工暂停", Since: time.Now(), PausedByOp: true}
 	}
 	data = fetch(deps3)
@@ -216,7 +243,7 @@ func TestRouter_StatusPipelineFields(t *testing.T) {
 
 	// 非人工暂停（致命错误/停机）→ 字段省略（omitempty，前端不出现恢复入口）
 	deps4, _ := testDeps()
-	deps4.Pipeline = func() PipelineSnapshot {
+	defaultSD(deps4).Pipeline = func() PipelineSnapshot {
 		return PipelineSnapshot{State: PipePaused, Error: "sink 不可重试", Since: time.Now()}
 	}
 	data = fetch(deps4)
@@ -256,7 +283,7 @@ func TestRouter_WriteConfirm(t *testing.T) {
 
 func TestRouter_EffectiveRules(t *testing.T) {
 	deps, _ := testDeps()
-	_ = deps.Rules.Match("db1", "t1") // 预热编译视图缓存
+	_ = defaultSD(deps).Rules.Match("db1", "t1") // 预热编译视图缓存
 	r := NewRouter(deps, AuthConfig{Username: "admin", Password: "pw"})
 	req := httptest.NewRequest("GET", "/api/v1/rules/effective", nil)
 	req.SetBasicAuth("admin", "pw")
@@ -294,7 +321,7 @@ func TestRouter_EffectiveRulesRedactMaskSecrets(t *testing.T) {
 	}
 	_ = compiled.Match("db1", "admin_user")
 	deps, _ := testDeps()
-	deps.Rules = compiled
+	defaultSD(deps).Rules = compiled
 	r := NewRouter(deps, AuthConfig{Username: "admin", Password: "pw"})
 	req := httptest.NewRequest("GET", "/api/v1/rules/effective", nil)
 	req.SetBasicAuth("admin", "pw")
@@ -317,7 +344,7 @@ func TestRouter_EffectiveRulesRedactMaskSecrets(t *testing.T) {
 
 func TestRouter_ListEndpointsReturnEmptyArrays(t *testing.T) {
 	deps, _ := testDeps()
-	deps.DDLLister = nilDDLLister{}
+	defaultSD(deps).DDLLister = nilDDLLister{}
 	deps.Audit = nilAuditSink{}
 	r := NewRouter(deps, AuthConfig{Username: "admin", Password: "pw"})
 
@@ -335,7 +362,7 @@ func TestRouter_ListEndpointsReturnEmptyArrays(t *testing.T) {
 func TestRouter_RestockSupportsDottedSchemas(t *testing.T) {
 	deps, _ := testDeps()
 	var gotSchema, gotTable string
-	deps.StockReset = func(_ context.Context, schema, table string) error {
+	defaultSD(deps).StockReset = func(_ context.Context, schema, table string) error {
 		gotSchema, gotTable = schema, table
 		return nil
 	}
@@ -391,7 +418,7 @@ func contains(s, sub string) bool {
 // 数据差异走 200（Mismatch 在 data 里而非 500——数据差异不是工具故障）。
 func TestRouter_Verify(t *testing.T) {
 	deps, _ := testDeps()
-	deps.Verify = func(_ context.Context, database, table, pk string, sample int) (*verify.Result, error) {
+	defaultSD(deps).Verify = func(_ context.Context, database, table, pk string, sample int) (*verify.Result, error) {
 		if database != "db1" || table != "t1" || pk != "id" || sample != 50 {
 			t.Errorf("参数透传不符: %s %s %s %d", database, table, pk, sample)
 		}

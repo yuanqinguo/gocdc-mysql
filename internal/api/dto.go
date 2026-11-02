@@ -29,6 +29,11 @@ type StatusData struct {
 	ConfigSource  string `json:"config_source"`
 	UptimeSeconds int64  `json:"uptime_seconds"`
 
+	// ── 源摘要数组（多源 PRD 06 §1.3：全部源的运行态一览）──
+	Sources []SourceStatus `json:"sources"`
+
+	// ── 顶层管线字段（兼容镜像，弃用窗口 ≥ 2 个小版本）──
+	// 单源部署镜像唯一源（行为与旧版一致）；多源部署置空（idle），以 sources[] 为准。
 	PipelineState   string    `json:"pipeline_state"`                  // Pipeline* 常量之一
 	PipelineError   string    `json:"pipeline_error,omitempty"`        // paused 时的首因错误（人工介入依据）
 	PipelineSince   time.Time `json:"pipeline_since,omitempty"`        // 进入当前状态的时刻
@@ -36,7 +41,36 @@ type StatusData struct {
 	EventLagSeconds *int64    `json:"event_lag_seconds,omitempty"`     // 距最近业务写入秒（稀疏写入会自然老化，仅参考）
 	CaughtUp        *bool     `json:"caught_up,omitempty"`             // GTID/位点追平口径：nil=无采样（stock 期/未 running）
 	MasterLagBytes  *float64  `json:"master_lag_bytes,omitempty"`      // 与源库 SHOW MASTER STATUS 字节差（追赶中时展示）
-	UseGTID         bool      `json:"use_gtid"`                        // source.use_gtid（位点模式迁移入口的显示判据）
+	UseGTID         bool      `json:"use_gtid"`                        // source.use_gtid（单源镜像；多源看 sources[].use_gtid）
+}
+
+// SourceStatus /status sources[] 单源摘要（现行顶层管线字段的源内版本 +
+// 装配期状态，多源 PRD 06 §1.3）。
+type SourceStatus struct {
+	ID    string `json:"id"`
+	Phase string `json:"phase"` // starting | ready | failed（装配期状态机，PRD 05 §3）
+
+	PipelineState   string    `json:"pipeline_state"`                  // Pipeline* 常量之一（failed 装配期 = idle）
+	PipelineError   string    `json:"pipeline_error,omitempty"`        // paused 首因错误 / failed 装配错误
+	PipelineSince   time.Time `json:"pipeline_since,omitempty"`        // 进入当前状态的时刻
+	PausedByOp      bool      `json:"pipeline_paused_by_op,omitempty"` // paused 源于人工暂停
+	EventLagSeconds *int64    `json:"event_lag_seconds,omitempty"`     // 距最近业务写入秒
+	CaughtUp        *bool     `json:"caught_up,omitempty"`             // 追平口径：nil=无采样
+	MasterLagBytes  *float64  `json:"master_lag_bytes,omitempty"`      // 与源库字节差
+	UseGTID         bool      `json:"use_gtid"`                        // 该源 source.use_gtid
+	Position        *PositionData `json:"position,omitempty"`           // etcd 已持久化位点摘要（无位点省略）
+}
+
+// SourceSummary GET /sources 源清单项（聚合总览页数据源，多源 PRD 06 §1.2）。
+type SourceSummary struct {
+	ID          string   `json:"id"`
+	SourceAddr  string   `json:"source_addr"`            // 源库地址（不含凭据）
+	TargetAddrs []string `json:"target_addrs"`           // 启用下游地址集
+	Sinks       []string `json:"sinks"`                  // 启用 sink 名集（mysql/kafka/rocketmq）
+	Rules       int      `json:"rules"`                  // 规则组数
+	Tables      int      `json:"tables"`                 // 白名单表数
+	State       string   `json:"state"`                  // pipeline_state；装配 failed 时为 failed(startup)
+	Error       string   `json:"error,omitempty"`        // failed/paused 时的错误摘要
 }
 
 // pipeline_state 取值（13 §3）。
@@ -145,6 +179,7 @@ const (
 	paramTableKey = "key"
 	paramSchema   = "schema"
 	paramTable    = "table"
+	paramSourceID = "sid"
 )
 
 // ConfirmSetPosition POST /position 的 body.confirm 专用口令（13 §3）。

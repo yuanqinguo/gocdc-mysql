@@ -62,8 +62,14 @@ func equalCred(a, b string) bool {
 func abort401(c *gin.Context, msg string) { abort(c, 401, msg) }
 
 // audit 审计事件（13 §3：who/what/when/结果 → 日志 + etcd events/audit 尾部
-// 保留 100 条；etcd 写失败仅日志告警，不阻塞操作）。
+// 保留 100 条；etcd 写失败仅日志告警，不阻塞操作）。cluster 级操作用本函数，
+// 源级操作用 auditSource（条目带 source 字段，多源 PRD 06 §2.5）。
 func audit(kv AuditSink, c *gin.Context, what, detail string, result error) {
+	auditSource(kv, c, "", what, detail, result)
+}
+
+// auditSource 源级审计（sid 空 = cluster 级操作，条目 source 显示 —）。
+func auditSource(kv AuditSink, c *gin.Context, sid, what, detail string, result error) {
 	who := "anonymous"
 	if v, ok := c.Get("who"); ok {
 		who = v.(string)
@@ -74,11 +80,11 @@ func audit(kv AuditSink, c *gin.Context, what, detail string, result error) {
 	}
 	logging.L().Info("审计",
 		logging.Event("audit"),
-		zap.String("who", who), zap.String("what", what),
+		zap.String("who", who), zap.String("what", what), zap.String("source", sid),
 		zap.String("path", c.Request.URL.Path), zap.String("detail", detail),
 		zap.String("result", res))
 	if kv != nil {
-		_ = kv.appendAudit(who, what+" "+c.Request.URL.Path+" "+detail, res, time.Now())
+		_ = kv.appendAuditSource(who, sid, what+" "+c.Request.URL.Path+" "+detail, res, time.Now())
 	}
 }
 
@@ -144,6 +150,7 @@ type auditEntry struct {
 	What   string    `json:"what"`
 	Result string    `json:"result"`
 	Node   string    `json:"node"`
+	Source string    `json:"source,omitempty"` // 源级操作填 sid；cluster 级留空（前端显示 —）
 	At     time.Time `json:"at"`
 }
 
@@ -157,9 +164,14 @@ func ringAppend(old []auditEntry, e auditEntry) []auditEntry {
 }
 
 func (a *AuditStore) appendAudit(who, what, result string, at time.Time) error {
+	return a.appendAuditSource(who, "", what, result, at)
+}
+
+// appendAuditSource 源级审计写入（sid 空 = cluster 级操作）。
+func (a *AuditStore) appendAuditSource(who, sid, what, result string, at time.Time) error {
 	a.mu.Lock()
 	a.seq++
-	e := auditEntry{Who: who, What: what, Result: result, Node: a.node, At: at}
+	e := auditEntry{Who: who, What: what, Result: result, Node: a.node, Source: sid, At: at}
 	a.mu.Unlock()
 
 	actx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -275,5 +287,12 @@ func (a *AuditStore) List(ctx context.Context, n int) ([]auditEntry, error) {
 // 仅在真实存储存在时传入非 nil 接口值）。
 type AuditSink interface {
 	appendAudit(who, what, result string, at time.Time) error
+	appendAuditSource(who, sid, what, result string, at time.Time) error
 	List(ctx context.Context, n int) ([]auditEntry, error)
+}
+
+// Append 写一条审计（cmd 装配层用——键迁移等进程级操作的留痕；HTTP 侧
+// 走包内闭包）。写失败仅返回错误，调用方按「审计尽力而为」告警不阻塞。
+func (a *AuditStore) Append(who, what, result string) error {
+	return a.appendAudit(who, what, result, time.Now())
 }

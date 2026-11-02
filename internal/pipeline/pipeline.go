@@ -43,6 +43,9 @@ type Options struct {
 
 	ExcludeSchemas []string // 库过滤（系统库+配置追加）
 
+	// SourceID 所属源 sid（多源：DDL 记录/日志溯源；空 = 单源/测试形态）。
+	SourceID string
+
 	DDLHooks *DDLHooks // DDL 策略外部依赖（nil = pause 停管线兜底）
 
 	// MasterPosFn 源库当前位点（SHOW BINARY LOG STATUS 的 Name/Pos/Executed_Gtid_Set；
@@ -163,7 +166,7 @@ func (p *Pipeline) Run(ctx context.Context, start model.Position, resume source.
 	var workerWG sync.WaitGroup
 	for i := range queues {
 		workerWG.Add(1)
-		w := NewWorker(queues[i], i, p.opts.Rules, p.opts.SchemaMgr, p.opts.Transformer,
+		w := NewWorker(queues[i], i, p.opts.SourceID, p.opts.Rules, p.opts.SchemaMgr, p.opts.Transformer,
 			p.opts.Sink, wm, persister.Force, p.opts.DDLHooks, &p.lastEventTs, p.opts.Metrics,
 			p.opts.BatchSize, p.opts.FlushInterval, p.log)
 		go func() {

@@ -22,8 +22,6 @@ import (
 	"gocdc/internal/etcdx"
 	"gocdc/internal/logging"
 	"gocdc/internal/metrics"
-	"gocdc/internal/position"
-	stockf "gocdc/internal/stock"
 )
 
 // connectEtcdAddrs 建立指向给定 endpoints 的 etcd 客户端（连接惰性，首个
@@ -103,13 +101,14 @@ func setupLogging(cfg *config.Config) error {
 }
 
 // startMetricsServer 指标与健康端点（/metrics /healthz /readyz，11 §2）。
-// 探针：config_loaded（能走到这里必然已加载）与 pipeline_running。
+// 探针：config_loaded（能走到这里必然已加载）与 pipeline_running（多源口径：
+// 任一源增量管线在跑即就绪——失败隔离下个别源 failed 不打红整个进程探针）。
 // 端口占用等致命错误 → 调 stop() 触发停机（fail-fast）。返回清理函数。
 func startMetricsServer(cfg *config.Config, stop context.CancelFunc) (*metrics.Metrics, func(), error) {
 	met := metrics.New()
 	mx := metrics.NewServer()
 	mx.RegisterProbe("config_loaded", func() bool { return true })
-	mx.RegisterProbe("pipeline_running", func() bool { return pipelineUp.Load() })
+	mx.RegisterProbe("pipeline_running", func() bool { return pipelineRunningSources.Load() > 0 })
 	srv := &http.Server{Addr: cfg.Observability.MetricsAddr, Handler: mx.Handler(met)}
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -125,21 +124,21 @@ func startMetricsServer(cfg *config.Config, stop context.CancelFunc) (*metrics.M
 	}, nil
 }
 
-// coordination 协调面：选举 session、节点注册、位点与全量标记存储。
+// coordination 协调面：选举 session 与节点注册（cluster 级共享）。
+// 位点/全量标记存储按源实例化（键空间 v2：{prefix}/sources/{sid}/…，
+// 见 newSourceTable），不再挂在 coordination 上。
 type coordination struct {
-	prefix  string
-	kv      *etcdx.KV
-	cli     *clientv3.Client
-	sess    *concurrency.Session
-	reg     *etcdx.Registrar
-	nodeID  string
-	store   *position.Store     // 位点（初始无门槛，当选后 SetGate）
-	markers *stockf.MarkerStore // 全量标记（同 lease 门槛）
+	prefix string
+	kv     *etcdx.KV
+	cli    *clientv3.Client
+	sess   *concurrency.Session
+	reg    *etcdx.Registrar
+	nodeID string
 }
 
 // setupCoordination etcd 协调面（03 §5）：lease session + 节点注册（role 初始
-// leader，选举/失位回调改写）+ 位点/标记存储（leaseID=0 写全拒，写门槛全覆盖：
-// follower/无主绝不写位点；起始位点读取在当选回调内）。
+// leader，选举/失位回调改写）。源级 store 初始无门槛（leaseID=0 写全拒，
+// 写门槛全覆盖：follower/无主绝不写位点；SetGate 在源流程启动时注入）。
 // 协调面 etcd 地址来自启动裁决（bootstrap.etcd_addrs，可与配置中心不同实例）。
 func setupCoordination(ctx context.Context, cluster string, cfg *config.Config,
 	kv *etcdx.KV, cli *clientv3.Client) (*coordination, func(), error) {
@@ -178,11 +177,9 @@ func setupCoordination(ctx context.Context, cluster string, cfg *config.Config,
 	c := &coordination{
 		prefix: prefix,
 		kv:     kv, cli: cli,
-		sess:    sess,
-		reg:     reg,
-		nodeID:  nodeID,
-		store:   position.NewStore(kv, prefix+"/position", "", 0),
-		markers: stockf.NewMarkerStore(kv, prefix+"/stock"),
+		sess:   sess,
+		reg:    reg,
+		nodeID: nodeID,
 	}
 	// 关闭按装配逆序：先注销节点，后关 session
 	cleanup := func() {

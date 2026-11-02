@@ -34,7 +34,7 @@ func (g *fakeDDLGate) Settle(_ context.Context, _, _, _ string) error { return n
 
 // pauseOnDDL 测试用构造：仅装配 gate 依赖（flush 空批早退不触 sink）。
 func newPauseTestWorker(hooks *DDLHooks) *Worker {
-	return NewWorker(nil, 0, nil, nil, nil, nil, NewWatermark(model.Position{}),
+	return NewWorker(nil, 0, "", nil, nil, nil, nil, NewWatermark(model.Position{}),
 		nil, hooks, nil, nil, 0, 0, nil)
 }
 

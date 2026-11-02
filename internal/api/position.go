@@ -8,9 +8,9 @@ import (
 	"gocdc/internal/model"
 )
 
-// getPosition GET /api/v1/position：当前同步位点（无位点 data=null）。
-func (h apiHandlers) getPosition(c *gin.Context) {
-	p, ok, err := h.Store.Load(c.Request.Context())
+// getPositionOf GET 位点（源作用域）：当前同步位点（无位点 data=null）。
+func getPositionOf(sd *SourceDeps, c *gin.Context) {
+	p, ok, err := sd.Store.Load(c.Request.Context())
 	if err != nil {
 		respondErr(c, 500, err.Error())
 		return
@@ -25,6 +25,16 @@ func (h apiHandlers) getPosition(c *gin.Context) {
 	})
 }
 
+// sourceGetPosition GET /api/v1/sources/:sid/position。
+func (h apiHandlers) sourceGetPosition(c *gin.Context) {
+	if sd := h.resolveSource(c); sd != nil {
+		getPositionOf(sd, c)
+	}
+}
+
+// legacyGetPosition 兼容层 GET /position（单源部署 = 唯一源等价别名）。
+func (h apiHandlers) legacyGetPosition(c *gin.Context, sd *SourceDeps) { getPositionOf(sd, c) }
+
 // mergeSetPosition SET-POSITION 融合决策（纯函数可单测）：请求只携带 name/pos，
 // 其余字段以 etcd 现值为底沿用——Store.Save 是整值覆盖，若只写请求三件套，
 // GTID 模式下会把 gtid_set 抹空（恢复后管线必因位点缺集合熔断），seq/任期
@@ -38,10 +48,10 @@ func mergeSetPosition(haveOld bool, old model.Position, body SetPositionRequest)
 	return old
 }
 
-// setPosition POST /api/v1/position：手工覆盖位点（危险操作——confirm 口令
+// setPositionOf POST 位点（源作用域）：手工覆盖位点（危险操作——confirm 口令
 // 门禁 + 审计，绕过水位连续性检查）。以 etcd 现值为底只覆盖 name/pos
 // （mergeSetPosition）；现值读取失败拒绝盲写。
-func (h apiHandlers) setPosition(c *gin.Context) {
+func (h apiHandlers) setPositionOf(sd *SourceDeps, c *gin.Context) {
 	var body SetPositionRequest
 	if err := c.ShouldBindJSON(&body); err != nil {
 		abort(c, 400, err.Error())
@@ -51,21 +61,31 @@ func (h apiHandlers) setPosition(c *gin.Context) {
 		abort(c, 400, `危险操作：body.confirm 须为 "SET-POSITION" 原样字符串（13 §3）`)
 		return
 	}
-	old, haveOld, lerr := h.Store.Load(c.Request.Context())
+	old, haveOld, lerr := sd.Store.Load(c.Request.Context())
 	if lerr != nil {
 		err := fmt.Errorf("读取现有位点失败，拒绝盲写（防止沿用字段丢失）: %w", lerr)
-		audit(auditOrNil(h.Audit), c, auditPositionSet,
+		auditSource(auditOrNil(h.Audit), c, sd.ID, auditPositionSet,
 			fmt.Sprintf("%s:%d", body.Name, body.Pos), err)
 		respondErr(c, 500, err.Error())
 		return
 	}
 	p := mergeSetPosition(haveOld, old, body)
 	p.NodeID = h.NodeID
-	err := h.Store.Save(c.Request.Context(), p)
-	audit(auditOrNil(h.Audit), c, auditPositionSet,
+	err := sd.Store.Save(c.Request.Context(), p)
+	auditSource(auditOrNil(h.Audit), c, sd.ID, auditPositionSet,
 		fmt.Sprintf("%s:%d", body.Name, body.Pos), err)
 	respondResult(c, err)
 }
+
+// sourceSetPosition POST /api/v1/sources/:sid/position。
+func (h apiHandlers) sourceSetPosition(c *gin.Context) {
+	if sd := h.resolveSource(c); sd != nil {
+		h.setPositionOf(sd, c)
+	}
+}
+
+// legacySetPosition 兼容层 POST /position。
+func (h apiHandlers) legacySetPosition(c *gin.Context, sd *SourceDeps) { h.setPositionOf(sd, c) }
 
 // gtidMigrateMaxGap migrate-gtid 的追平门槛：位点距 master 尾部最大容忍字节差。
 // 窗口内未确认事务将被跳过（响应明示 gap_bytes）；超出则拒绝并指引先追平。
@@ -139,9 +159,9 @@ func planFilePosMigration(useGTID bool, havePos bool, pos model.Position, oldest
 	return pos, nil
 }
 
-// migrateGTID POST /api/v1/position/migrate-gtid：file:pos 存量位点 → GTID 基线
+// migrateGTIDOf POST migrate-gtid（源作用域）：file:pos 存量位点 → GTID 基线
 // （use_gtid 切换后管线因 ErrInvalidPosition 暂停的恢复路径，P3）。
-func (h apiHandlers) migrateGTID(c *gin.Context) {
+func (h apiHandlers) migrateGTIDOf(sd *SourceDeps, c *gin.Context) {
 	if !requireConfirm(c) {
 		return
 	}
@@ -151,19 +171,19 @@ func (h apiHandlers) migrateGTID(c *gin.Context) {
 		mp      model.Position
 		verr    *apiError
 	)
-	if h.UseGTID && h.MasterPos != nil {
-		p, ok, err := h.Store.Load(c.Request.Context())
+	if sd.UseGTID && sd.MasterPos != nil {
+		p, ok, err := sd.Store.Load(c.Request.Context())
 		if err != nil {
 			respondErr(c, 500, err.Error())
 			return
 		}
 		pos, havePos = p, ok
-		mp, err = h.MasterPos(c.Request.Context())
+		mp, err = sd.MasterPos(c.Request.Context())
 		if err != nil {
 			respondErr(c, 500, "读取源库尾部位点失败: "+err.Error())
 			return
 		}
-	} else if !h.UseGTID {
+	} else if !sd.UseGTID {
 		verr = &apiError{400, "use_gtid 未开启：先在配置中心把 source.use_gtid 改为 true 并重启，管线会因位点缺 gtid_set 暂停，届时回到本页执行迁移"}
 	} else {
 		respondErr(c, 500, "未装配源库位点采样")
@@ -173,15 +193,15 @@ func (h apiHandlers) migrateGTID(c *gin.Context) {
 	var gtidSet string
 	var gap int64
 	if verr == nil {
-		gtidSet, gap, verr = planGTIDMigration(h.UseGTID, havePos, pos, mp)
+		gtidSet, gap, verr = planGTIDMigration(sd.UseGTID, havePos, pos, mp)
 	}
-	audit(auditOrNil(h.Audit), c, auditPositionMigrateGTID, "migrate-gtid", apiErrToError(verr))
+	auditSource(auditOrNil(h.Audit), c, sd.ID, auditPositionMigrateGTID, "migrate-gtid", apiErrToError(verr))
 	if verr != nil {
 		abort(c, verr.code, verr.msg)
 		return
 	}
 	pos.GTIDSet = gtidSet
-	if err := h.Store.Save(c.Request.Context(), pos); err != nil {
+	if err := sd.Store.Save(c.Request.Context(), pos); err != nil {
 		respondErr(c, 500, "位点写入失败（lease 门槛未通过？）: "+err.Error())
 		return
 	}
@@ -191,8 +211,18 @@ func (h apiHandlers) migrateGTID(c *gin.Context) {
 	})
 }
 
-// migrateFilePos POST /api/v1/position/migrate-filepos：GTID → file:pos（反向）。
-func (h apiHandlers) migrateFilePos(c *gin.Context) {
+// sourceMigrateGTID POST /api/v1/sources/:sid/position/migrate-gtid。
+func (h apiHandlers) sourceMigrateGTID(c *gin.Context) {
+	if sd := h.resolveSource(c); sd != nil {
+		h.migrateGTIDOf(sd, c)
+	}
+}
+
+// legacyMigrateGTID 兼容层 POST /position/migrate-gtid。
+func (h apiHandlers) legacyMigrateGTID(c *gin.Context, sd *SourceDeps) { h.migrateGTIDOf(sd, c) }
+
+// migrateFilePosOf POST migrate-filepos（源作用域）：GTID → file:pos（反向）。
+func (h apiHandlers) migrateFilePosOf(sd *SourceDeps, c *gin.Context) {
 	if !requireConfirm(c) {
 		return
 	}
@@ -202,19 +232,19 @@ func (h apiHandlers) migrateFilePos(c *gin.Context) {
 		oldest  string
 		verr    *apiError
 	)
-	if h.UseGTID {
+	if sd.UseGTID {
 		verr = &apiError{400, "use_gtid 仍为 true：先在配置中心改回 false 并重启，再执行反向迁移"}
-	} else if h.OldestBinlog == nil {
+	} else if sd.OldestBinlog == nil {
 		respondErr(c, 500, "未装配源库 binlog 清单采样")
 		return
 	} else {
-		p, ok, err := h.Store.Load(c.Request.Context())
+		p, ok, err := sd.Store.Load(c.Request.Context())
 		if err != nil {
 			respondErr(c, 500, err.Error())
 			return
 		}
 		pos, havePos = p, ok
-		oldest, err = h.OldestBinlog(c.Request.Context())
+		oldest, err = sd.OldestBinlog(c.Request.Context())
 		if err != nil {
 			respondErr(c, 500, "读取源库最老 binlog 失败: "+err.Error())
 			return
@@ -223,14 +253,14 @@ func (h apiHandlers) migrateFilePos(c *gin.Context) {
 
 	var newPos model.Position
 	if verr == nil {
-		newPos, verr = planFilePosMigration(h.UseGTID, havePos, pos, oldest)
+		newPos, verr = planFilePosMigration(sd.UseGTID, havePos, pos, oldest)
 	}
-	audit(auditOrNil(h.Audit), c, auditPositionMigrateFilePos, "migrate-filepos", apiErrToError(verr))
+	auditSource(auditOrNil(h.Audit), c, sd.ID, auditPositionMigrateFilePos, "migrate-filepos", apiErrToError(verr))
 	if verr != nil {
 		abort(c, verr.code, verr.msg)
 		return
 	}
-	if err := h.Store.Save(c.Request.Context(), newPos); err != nil {
+	if err := sd.Store.Save(c.Request.Context(), newPos); err != nil {
 		respondErr(c, 500, "位点写入失败（lease 门槛未通过？）: "+err.Error())
 		return
 	}
@@ -239,3 +269,13 @@ func (h apiHandlers) migrateFilePos(c *gin.Context) {
 		"next": "重启进程；增量将从最老 binlog 头重放，下游幂等吸收重复",
 	})
 }
+
+// sourceMigrateFilePos POST /api/v1/sources/:sid/position/migrate-filepos。
+func (h apiHandlers) sourceMigrateFilePos(c *gin.Context) {
+	if sd := h.resolveSource(c); sd != nil {
+		h.migrateFilePosOf(sd, c)
+	}
+}
+
+// legacyMigrateFilePos 兼容层 POST /position/migrate-filepos。
+func (h apiHandlers) legacyMigrateFilePos(c *gin.Context, sd *SourceDeps) { h.migrateFilePosOf(sd, c) }

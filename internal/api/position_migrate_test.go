@@ -95,8 +95,8 @@ func TestAuditTypedNilSafety(t *testing.T) {
 // TestRouter_MigrateGuards 路由守卫：缺 confirm / use_gtid 未开（不触 Store）。
 func TestRouter_MigrateGuards(t *testing.T) {
 	deps, _ := testDeps()
-	deps.MasterPos = func(context.Context) (model.Position, error) { return model.Position{}, nil }
-	deps.OldestBinlog = func(context.Context) (string, error) { return "binlog.000001", nil }
+	defaultSD(deps).MasterPos = func(context.Context) (model.Position, error) { return model.Position{}, nil }
+	defaultSD(deps).OldestBinlog = func(context.Context) (string, error) { return "binlog.000001", nil }
 	r := NewRouter(deps, AuthConfig{Username: "admin", Password: "pw"})
 
 	post := func(path string) string {

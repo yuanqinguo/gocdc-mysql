@@ -17,6 +17,12 @@ const (
 	EventStockStart    = "stock_start"    // 全量开始（附表清单）
 	EventStockDone     = "stock_done"     // 全量完成（附表与行数）
 	EventConfigLoaded  = "config_loaded"  // 配置加载成功（附来源/版本）
+
+	// 多源（PRD 07 §3）：源生命周期事件
+	EventSourceComponentsFailed = "source_components_failed" // 源装配失败（附 error/退避）
+	EventSourceReady            = "source_ready"             // 源装配完成就绪
+	EventSourceRecovered        = "source_recovered"         // failed 源重试成功恢复
+	EventEtcdKeysMigrated       = "etcd_keys_migrated"       // v1→v2 键迁移完成（附明细）
 )
 
 // Event 返回生命周期事件字段 zap.String("event", name)。

@@ -1,14 +1,18 @@
-// 选举驱动的管线生命周期（03 §4）：follower 不启管线；当选 → SetGate
-// 位点门槛 + 全量初始化 + 启动增量管线；失联/落选 → 立即停管线。
+// 选举驱动的多源管线生命周期（03 §4 + 多源 PRD 05）：
+// follower 不启管线；当选 → 逐源 SetGate 写门槛 → GC → 每源一个 goroutine
+// （暂停闸 → 全量 → 增量管线）；失联/落选 → cancel 共享 leadCtx → 全部源
+// 并行 drain → 等待退出。
 //
-// 锁纪律：pipeMu 只保护 pipeCancel/pipeDone 指针赋值——全量扫描
-// （小时级）绝不持锁（OnLost 抢锁会阻塞 elector 状态机：失联后不重新参选、
-// SIGTERM 挂死）；stock 与增量管线共用 leadership 派生 ctx，OnLost 取消即中断。
+// 锁纪律（沿袭单源版）：pipeMu 只保护指针赋值——全量扫描（小时级）绝不持锁
+// （OnLost 抢锁会阻塞 elector 状态机）；stock 与增量管线共用该源流程 ctx，
+// leadCtx 取消即级联中断。
+//
+// 每源单槽互斥（src.pipeCancel）防同一源重复启动；leadMu 单槽防重复当选回调
+// 重入 leader 流程。人工暂停只取消该源的派生 ctx，其余源与 leader 任期不受影响。
 package main
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"sync"
@@ -27,97 +31,74 @@ import (
 	"gocdc/internal/metrics"
 	"gocdc/internal/model"
 	"gocdc/internal/pipeline"
-	"gocdc/internal/position"
-	"gocdc/internal/schema"
 	"gocdc/internal/source"
 	stockf "gocdc/internal/stock"
-	"gocdc/internal/transform"
 )
 
-// app 进程运行期共享组件（装配一次，onElected/onLost 方法消费）。
+// app 进程运行期共享组件（cluster 级一个 + 源表；装配一次，onElected/onLost 消费）。
 type app struct {
 	opts *options
 	cfg  *config.Config
 	ctx  context.Context // 应用生命周期 ctx（reg.Update / leadership 派生父 ctx）
 
 	cli    *clientv3.Client
+	kv     kvClient
 	prefix string
 	sess   *concurrency.Session
-	reg    *etcdx.Registrar
+	reg    registrarClient
 	nodeID string
+	met    metricsClient
 
-	srcDB       *sql.DB
-	schemaMgr   *schema.Manager
-	transformer *transform.Transformer
-	router      *pipeline.SinkRouter
-	rules       *pipeline.CompiledRules
-	ddlHooks    *pipeline.DDLHooks
-	ddlGate     *pipeline.EtcdDDLGate
-	tz          *time.Location
-	met         *metrics.Metrics
+	sources *sourceTable
 
-	store       *position.Store
-	markers     *stockf.MarkerStore
-	ruleSchemas []string
-	resumeFn    source.ResumeFunc // 源端断线重连一律回到 etcd 已持久化位点
-
-	stockSvc atomic.Pointer[stockf.Service] // Web restock 读取（onElected 重建）
-
-	pipeMu     sync.Mutex
-	pipeCancel context.CancelFunc
-	pipeDone   chan struct{}
-
-	// 人工暂停管线（13 §3）：pause 持久标志在 etcd {prefix}/pipeline-pause
-	//（无 lease——暂停是持久意图，跨重启/失位，直到显式 resume）。
-	pauseKey   string                           // etcd 暂停标志 key
-	leading    atomic.Bool                      // 本进程承担管线（onElected 置位/onLost 清位）
-	opPaused   atomic.Bool                      // 人工暂停态（/status paused_by_op 展示）
-	curElected atomic.Pointer[electorf.Elected] // 当选信息（resume 重启流程复用）
+	// ── leader 任期（cluster 级单槽）──
+	leadMu     sync.Mutex
+	leadCancel context.CancelFunc
+	leadDone   chan struct{}
+	leadCtxRef atomic.Pointer[leadContext] // 当任 ctx（resume 重启源流程取用）
+	leading    atomic.Bool                 // 本进程承担管线（onElected 置位/onLost 清位）
 }
 
-// newApp 汇集装配产物并构造 resume 回调（04 §5 位点不变式：断线重连
-// 回到 etcd 已确认位点，at-least-once 重放）。
+// leadContext 当任任期快照（resume 等延迟启动路径取用；失位后置 nil）。
+type leadContext struct {
+	ctx  context.Context
+	info electorf.Elected
+}
+
+// kvClient/registrarClient/metricsClient 依赖别名（测试可替换）。
+type (
+	kvClient        = *etcdx.KV
+	registrarClient = *etcdx.Registrar
+	metricsClient   = *metrics.Metrics
+)
+
+// newApp 构造：源表（etcd 状态面逐源实例化）+ 共享协调面引用。
 func newApp(opts *options, cfg *config.Config, ctx context.Context,
-	coord *coordination, comp *components, srcDB *sql.DB, met *metrics.Metrics) *app {
+	cli *clientv3.Client, kv kvClient, prefix string,
+	sess *concurrency.Session, reg registrarClient, nodeID string, met metricsClient) *app {
 
-	a := &app{
+	return &app{
 		opts: opts, cfg: cfg, ctx: ctx,
-		cli: coord.cli, prefix: coord.prefix, sess: coord.sess, reg: coord.reg,
-		nodeID: coord.nodeID,
-		srcDB:  srcDB, schemaMgr: comp.schemaMgr, transformer: comp.transformer,
-		router: comp.router, rules: comp.rules, ddlHooks: comp.ddlHooks,
-		ddlGate: comp.ddlGate,
-		tz:      comp.tz, met: met,
-		store: coord.store, markers: coord.markers,
-		ruleSchemas: comp.ruleSchemas,
-		pauseKey:    coord.prefix + "/pipeline-pause",
+		cli: cli, kv: kv, prefix: prefix, sess: sess, reg: reg, nodeID: nodeID, met: met,
+		sources: newSourceTable(cfg, prefix, kv),
 	}
-	a.resumeFn = func() model.Position {
-		rctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		p, ok, err := a.store.Load(rctx)
-		if err != nil || !ok {
-			return model.Position{}
-		}
-		return p
-	}
-	return a
 }
 
-// newPipeline 按任期构造增量管线（source 每任期新建；其余组件跨任期复用）。
-func (a *app) newPipeline(term int64) *pipeline.Pipeline {
-	spec := a.cfg.Single()
+// newPipeline 按任期构造单源增量管线（source 每任期新建；其余组件跨任期复用）。
+func (a *app) newPipeline(src *sourceState, term int64) *pipeline.Pipeline {
+	b := src.built.Load()
+	spec := src.spec
 	return pipeline.New(pipeline.Options{
 		Source: source.New(source.Config{
 			Addr: spec.Source.Addr, User: spec.Source.User, Password: spec.Source.Password,
 			Charset: spec.Source.Charset, Flavor: spec.Source.Flavor, ServerID: spec.Source.ServerID,
-			Timezone: a.tz, UseGTID: spec.Source.UseGTID,
+			Timezone: b.comp.tz, UseGTID: spec.Source.UseGTID,
 			HeartbeatInterval: time.Duration(spec.Source.HeartbeatIntervalMS) * time.Millisecond,
 			ReadTimeout:       time.Duration(spec.Source.ReadTimeoutMS) * time.Millisecond,
 		}, logging.L()),
-		SchemaMgr: a.schemaMgr, Transformer: a.transformer,
-		Sink: a.router, Store: a.store, Rules: a.rules,
-		DDLHooks: a.ddlHooks,
+		SchemaMgr: b.comp.schemaMgr, Transformer: b.comp.transformer,
+		Sink: b.comp.router, Store: src.store, Rules: b.comp.rules,
+		DDLHooks: b.comp.ddlHooks,
 		Metrics:  a.met, Log: logging.L(),
 		Workers:       spec.Pipeline.Workers,
 		QueueSize:     spec.Pipeline.WorkerQueueSize,
@@ -127,84 +108,49 @@ func (a *app) newPipeline(term int64) *pipeline.Pipeline {
 		NodeID:        a.nodeID, Term: term, MaxSaveFails: 30,
 		DrainTimeout:   10 * time.Second, // 让位/失联切换 ≈ 排空时间（03 §4.2-4）
 		ExcludeSchemas: spec.Source.ExcludeSchemas,
+		SourceID:       src.sid,
 		MasterPosFn: func(mctx context.Context) (model.Position, error) {
-			return showMasterStatus(mctx, a.srcDB)
+			return showMasterStatus(mctx, b.srcDB)
 		},
 		Flavor: spec.Source.Flavor,
 	})
 }
 
 // onElected 当选回调（elector 转发；本方法内转 goroutine，不阻塞选举循环）：
-// 位点/标记写门槛切换 → 全量初始化（06）→ 增量管线。
+// leader 流程 = 逐源启动（每源自己的 goroutine：写门槛 → 暂停闸 → 全量 → 增量）。
 func (a *app) onElected(info electorf.Elected) {
 	go a.runLeaderFlow(info)
 }
 
-// runLeaderFlow leader 侧主流程：占槽（pipeCancel/pipeDone）→ 写门槛 →
-// 人工暂停检查 → 全量初始化 → 增量管线。当选与 /pipeline/resume 共用；
-// 退出时机 = leadCtx 取消（失位/让位/停机/人工暂停）或致命错误。
+// runLeaderFlow leader 侧主流程（占 leadMu 单槽）：
+// 写门槛与全量/增量全部下沉到每源的 runSourceFlow；本流程只负责
+// 任期 ctx、leader 指标/角色、GC 循环、就绪源并发启动。
 func (a *app) runLeaderFlow(info electorf.Elected) {
-	// leadership 生命周期 ctx：全量 + 增量共用；OnLost/停机即取消
+	// leadership 生命周期 ctx：全部源共用；OnLost/停机即取消
 	leadCtx, cancel := context.WithCancel(a.ctx)
 	done := make(chan struct{})
-	a.pipeMu.Lock()
-	if a.pipeCancel != nil { // 已有任期在运行（重复当选回调）
-		a.pipeMu.Unlock()
+	a.leadMu.Lock()
+	if a.leadCancel != nil { // 已有任期在运行（重复当选回调）
+		a.leadMu.Unlock()
 		cancel()
 		return
 	}
-	a.pipeCancel = cancel
-	a.pipeDone = done
-	a.pipeMu.Unlock()
+	a.leadCancel = cancel
+	a.leadDone = done
+	a.leadMu.Unlock()
 	defer func() {
 		cancel()
-		a.pipeMu.Lock()
-		a.pipeCancel = nil
-		a.pipeDone = nil
-		a.pipeMu.Unlock()
+		a.leadCtxRef.Store(nil)
+		a.leadMu.Lock()
+		a.leadCancel = nil
+		a.leadDone = nil
+		a.leadMu.Unlock()
 		close(done)
 	}()
 
 	a.leading.Store(true)
-	a.curElected.Store(&info)
+	a.leadCtxRef.Store(&leadContext{ctx: leadCtx, info: info})
 	defer a.leading.Store(false)
-
-	// 位点/全量标记写门槛 → leader 指针 key + 当选 lease（06 §4.2-2）
-	a.store.SetGate(info.LeaderKey, info.LeaseID)
-	a.markers.SetGate(info.LeaderKey, info.LeaseID)
-
-	// ── 人工暂停闸（13 §3）：持久 pause key 存在 → 不启动全量/增量；
-	// 保持 Leader（DDL 审批 gate 继续服务），恢复走 /pipeline/resume ──
-	if paused, perr := a.pauseFlagExists(leadCtx); perr != nil {
-		logging.L().Warn("读取人工暂停标志失败（按未暂停处理）", zap.Error(perr))
-	} else if paused {
-		a.opPaused.Store(true)
-		logging.L().Info("人工暂停标志生效，本任期不启动管线",
-			zap.Int64("term", info.Term))
-		setPipelineState(api.PipePaused, "管线已被人工暂停（恢复入口：总控台或位点管理页 /pipeline/resume）")
-		return
-	}
-	a.opPaused.Store(false)
-
-	// ── etcd 治理 GC：stock 死标记 + 已决 DDL 记录，低频后台循环 ──
-	go a.gcLoop(leadCtx)
-
-	// ── 全量初始化（06）：do_stock 表无 done 标记 → 先全量后增量；
-	// done → 跳过（重启不重跑全量）。失联取消不按失败记账 ──
-	setPipelineState(api.PipeStock, "")
-	startPos, err := a.runStock(leadCtx)
-	if err != nil {
-		// 状态对外可见：人工暂停取消 = paused（恢复闭环可见）；失位/停机 =
-		// 正常停止；真失败 = paused 待人工介入
-		if a.opPaused.Load() {
-			setPipelineState(api.PipePaused, "管线已被人工暂停（恢复入口：总控台或位点管理页 /pipeline/resume）")
-		} else if leadCtx.Err() != nil {
-			setPipelineState(api.PipeStopped, "")
-		} else {
-			setPipelineState(api.PipePaused, "全量初始化失败: "+err.Error())
-		}
-		return // runStock 内部已按 取消/失败 分别记账
-	}
 
 	met := a.met
 	met.LeaderState.Set(1)
@@ -214,51 +160,141 @@ func (a *app) runLeaderFlow(info electorf.Elected) {
 	_ = a.reg.Update(uctx, a.sess, "leader")
 	ucancel()
 
-	pipelineUp.Store(true)
-	setPipelineState(api.PipeRunning, "")
-	pl := a.newPipeline(info.Term)
-	currentPipeline.Store(pl)
-	logging.L().Info("leader 管线启动",
+	// ── etcd 治理 GC：遍历全部源（stock 死标记 + 已决 DDL，低频后台循环）──
+	go a.gcLoop(leadCtx)
+
+	// ── 就绪源并发启动；failed/starting 源由装配监督循环在就绪后补入
+	// （launchIfLeading，PRD 05 §2 握手）。leader 流程随后阻塞至任期结束
+	// （leadCtx 取消 = 失位/让位/停机）——任期态（leading/leadCtxRef）必须
+	// 存活整届：延迟就绪源的补入与 pause→resume 重启都依赖当任 ctx ──
+	ready := a.sources.ready()
+	pending := len(a.sources.all()) - len(ready)
+	if pending > 0 {
+		logging.L().Warn("部分源未就绪，本届任期先启动就绪源（其余源装配成功后自动加入）",
+			zap.Int("ready", len(ready)), zap.Int("pending", pending))
+	}
+	for _, src := range ready {
+		go a.runSourceFlow(leadCtx, src, info)
+	}
+	<-leadCtx.Done()
+}
+
+// runSourceFlow 单源任期流程（现行单源 runLeaderFlow 的逐源版）：
+// 占源单槽 → 写门槛（gate 锚 = cluster leader key）→ 人工暂停闸 →
+// 全量初始化 → 增量管线。退出时机 = 源 ctx 取消（失位/让位/停机/人工暂停）
+// 或该源致命错误（paused 保持 leader 等人工，其余源不受影响——D5）。
+func (a *app) runSourceFlow(leadCtx context.Context, src *sourceState, info electorf.Elected) {
+	// 源流程 ctx：leadCtx 派生——人工暂停/该源致命退出只影响本源
+	srcCtx, cancel := context.WithCancel(leadCtx)
+	done := make(chan struct{})
+	src.pipeMu.Lock()
+	if src.pipeCancel != nil { // 该源已有任期流程在跑（重复启动）
+		src.pipeMu.Unlock()
+		cancel()
+		return
+	}
+	src.pipeCancel = cancel
+	src.pipeDone = done
+	src.pipeMu.Unlock()
+	defer func() {
+		cancel()
+		src.pipeMu.Lock()
+		src.pipeCancel = nil
+		src.pipeDone = nil
+		src.pipeMu.Unlock()
+		close(done)
+	}()
+
+	src.curElected.Store(&info)
+
+	// 位点/全量标记写门槛 → 同一 cluster leader key + 当选 lease（PRD 04 §3：
+	// 锚点唯一 ⇒ 防脑裂结论对全部源子树成立）
+	src.store.SetGate(info.LeaderKey, info.LeaseID)
+	src.markers.SetGate(info.LeaderKey, info.LeaseID)
+
+	log := logging.L().With(zap.String("source", src.sid))
+
+	// ── 人工暂停闸（13 §3 逐源版）：持久 pause key 存在 → 不启动全量/增量；
+	// 保持 Leader（DDL 审批 gate 继续服务），恢复走该源 /pipeline/resume ──
+	if paused, perr := a.pauseFlagExists(src, srcCtx); perr != nil {
+		log.Warn("读取人工暂停标志失败（按未暂停处理）", zap.Error(perr))
+	} else if paused {
+		src.opPaused.Store(true)
+		log.Info("人工暂停标志生效，本任期不启动该源管线", zap.Int64("term", info.Term))
+		src.setState(api.PipePaused, "管线已被人工暂停（恢复入口：总控台或位点管理页该源的 /pipeline/resume）")
+		return
+	}
+	src.opPaused.Store(false)
+
+	// ── 全量初始化（06 逐源）：do_stock 表无 done 标记 → 先全量后增量 ──
+	src.setState(api.PipeStock, "")
+	startPos, err := a.runStock(srcCtx, src)
+	if err != nil {
+		// 状态对外可见：人工暂停取消 = paused（恢复闭环可见）；失位/停机 =
+		// 正常停止；真失败 = paused 待人工介入（只停该源，D5）
+		if src.opPaused.Load() {
+			src.setState(api.PipePaused, "管线已被人工暂停（恢复入口：总控台或位点管理页该源的 /pipeline/resume）")
+		} else if srcCtx.Err() != nil {
+			src.setState(api.PipeStopped, "")
+		} else {
+			src.setState(api.PipePaused, "全量初始化失败: "+err.Error())
+		}
+		return // runStock 内部已按 取消/失败 分别记账
+	}
+
+	pipelineRunningSources.Add(1)
+	src.running.Store(true)
+	src.setState(api.PipeRunning, "")
+	pl := a.newPipeline(src, info.Term)
+	src.curPipeline.Store(pl)
+	log.Info("leader 源管线启动",
 		logging.Event(logging.EventPipelineStart),
 		zap.Int64("term", info.Term),
 		zap.String("file", startPos.Name), zap.Uint32("pos", startPos.Pos))
-	perr := pl.Run(leadCtx, startPos, a.resumeFn)
-	pipelineUp.Store(false)
-	if perr != nil && !errors.Is(perr, context.Canceled) && leadCtx.Err() == nil {
+	perr := pl.Run(srcCtx, startPos, src.resumeFn)
+	src.running.Store(false)
+	pipelineRunningSources.Add(-1)
+	if perr != nil && !errors.Is(perr, context.Canceled) && srcCtx.Err() == nil {
 		// 管线致命错误（sink 不可重试 / 转换 fail_event / 位点熔断 / 拉取侧
 		// 位点非法）：记录并保留 leadership 复核（DDL 审批 gate 仍需本节点
-		// 服务）；人工修复后重启进程恢复
-		logging.L().Error("管线退出（非停机）", zap.Error(perr))
-		met.PipelinePaused.WithLabelValues("*", "*", "fatal").Set(1)
-		setPipelineState(api.PipePaused, perr.Error())
-	} else if a.opPaused.Load() {
-		// 人工暂停（/pipeline/pause 取消 leadCtx）：位点终值已落盘，
+		// 服务）；人工修复后重启进程恢复。只停该源（D5 失败隔离）。
+		log.Error("源管线退出（非停机）", zap.Error(perr))
+		a.met.PipelinePaused.WithLabelValues("*", "*", "fatal").Set(1)
+		src.setState(api.PipePaused, perr.Error())
+	} else if src.opPaused.Load() {
+		// 人工暂停（该源 /pipeline/pause 取消源 ctx）：位点终值已落盘，
 		// 展示为可恢复的暂停态而非失位停机
-		setPipelineState(api.PipePaused, "管线已被人工暂停（恢复入口：总控台或位点管理页 /pipeline/resume）")
+		src.setState(api.PipePaused, "管线已被人工暂停（恢复入口：总控台或位点管理页该源的 /pipeline/resume）")
 	} else {
-		setPipelineState(api.PipeStopped, "") // 失位/让位/停机：正常退出
+		src.setState(api.PipeStopped, "") // 失位/让位/停机：正常退出
 	}
 }
 
-// gcLoop leader 侧低频 etcd 治理：① stock 死标记——白名单外表的标记
-// 永远不会再被 runStock 读取（done 保留语义不受影响，白名单内不动）；
+// gcLoop leader 侧低频 etcd 治理（PRD 04 §7）：遍历全部源，逐源执行
+// ① stock 死标记——白名单外表的标记永远不会再被 runStock 读取；
 // ② 已决 DDL 记录——超过 DDLGCRetention 删除，pending 永不删。
-// 当选后立即跑一次，之后每小时一次；失位/停机随 leadCtx 退出。
+// 单源失败只告警不中断其他源清理。当选后立即跑一次，之后每小时一次。
 func (a *app) gcLoop(ctx context.Context) {
 	run := func() {
-		gctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-		if n, err := a.markers.GC(gctx, func(dbTable string) bool {
-			return a.rules.MatchByKey(dbTable) != nil
-		}); err != nil {
-			logging.L().Warn("stock 死标记 GC 失败", zap.Error(err))
-		} else if n > 0 {
-			logging.L().Info("stock 死标记 GC 完成", zap.Int("removed", n))
-		}
-		if n, err := a.ddlGate.GC(gctx, pipeline.DDLGCRetention); err != nil {
-			logging.L().Warn("DDL 已决记录 GC 失败", zap.Error(err))
-		} else if n > 0 {
-			logging.L().Info("DDL 已决记录 GC 完成", zap.Int("removed", n))
+		for _, src := range a.sources.all() {
+			b := src.built.Load()
+			if b == nil {
+				continue // 未装配完成：无规则/gate 可查
+			}
+			gctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			if n, err := src.markers.GC(gctx, func(dbTable string) bool {
+				return b.comp.rules.MatchByKey(dbTable) != nil
+			}); err != nil {
+				logging.L().Warn("stock 死标记 GC 失败", zap.String("source", src.sid), zap.Error(err))
+			} else if n > 0 {
+				logging.L().Info("stock 死标记 GC 完成", zap.String("source", src.sid), zap.Int("removed", n))
+			}
+			if n, err := b.comp.ddlGate.GC(gctx, pipeline.DDLGCRetention); err != nil {
+				logging.L().Warn("DDL 已决记录 GC 失败", zap.String("source", src.sid), zap.Error(err))
+			} else if n > 0 {
+				logging.L().Info("DDL 已决记录 GC 完成", zap.String("source", src.sid), zap.Int("removed", n))
+			}
+			cancel()
 		}
 	}
 	run()
@@ -274,97 +310,115 @@ func (a *app) gcLoop(ctx context.Context) {
 	}
 }
 
-// runStock 全量初始化（06）：无标记表快照 + 增量起点推导（max(位点, 全局
-// stock_position)，06 §4.1）+ PURGED 检查（06 §7）。返回增量起点。
-// ctx 取消 = 失联/停机（静默退出，defer 清理）；其余失败记错误日志。
-func (a *app) runStock(leadCtx context.Context) (model.Position, error) {
-	stockSvc := stockf.New(a.srcDB, a.schemaMgr, a.transformer, a.router,
-		a.markers, *a.cfg.Single().Stock, a.rules, a.met, a.nodeID, logging.L())
-	stockSvc.SetSchemas(a.ruleSchemas)
-	a.stockSvc.Store(stockSvc)
-	sres, serr := stockSvc.Run(leadCtx)
+// runStock 单源全量初始化（06 逐源）：无标记表快照 + 增量起点推导
+// （max(该源位点, 该源 stock_position)，06 §4.1）+ PURGED 检查（06 §7）。
+// 返回该源增量起点。ctx 取消 = 失联/停机/人工暂停（静默退出，defer 清理）。
+func (a *app) runStock(srcCtx context.Context, src *sourceState) (model.Position, error) {
+	b := src.built.Load()
+	log := logging.L().With(zap.String("source", src.sid))
+	stockSvc := stockf.New(b.srcDB, b.comp.schemaMgr, b.comp.transformer, b.comp.router,
+		src.markers, *src.spec.Stock, b.comp.rules, a.met, a.nodeID, logging.L())
+	stockSvc.SetSchemas(b.comp.ruleSchemas)
+	src.stockSvc.Store(stockSvc)
+	sres, serr := stockSvc.Run(srcCtx)
 	if serr != nil {
-		if leadCtx.Err() != nil {
-			return model.Position{}, leadCtx.Err() // 失联/停机取消：defer 清理即可
+		if srcCtx.Err() != nil {
+			return model.Position{}, srcCtx.Err() // 失联/停机/暂停取消：defer 清理即可
 		}
-		logging.L().Error("全量初始化失败，本轮不启动管线（修复后重启/resume）",
+		log.Error("全量初始化失败，本轮不启动该源管线（修复后重启/resume）",
 			logging.Event(logging.EventStockStart), zap.Error(serr))
 		return model.Position{}, serr
 	}
-	if leadCtx.Err() != nil {
-		return model.Position{}, leadCtx.Err()
+	if srcCtx.Err() != nil {
+		return model.Position{}, srcCtx.Err()
 	}
 
 	// 增量起点 = max(已存位点, 全局 stock_position)（06 §4.1）
-	startPos, ok, err := a.store.Load(leadCtx)
+	startPos, ok, err := src.store.Load(srcCtx)
 	if err != nil {
-		logging.L().Error("当选后读取位点失败，本轮不启动管线", zap.Error(err))
+		log.Error("当选后读取位点失败，本轮不启动该源管线", zap.Error(err))
 		return model.Position{}, err
 	}
 	if sres.StockPos.Name != "" && (!ok || laterBinlog(sres.StockPos, startPos)) {
 		startPos = sres.StockPos
 	}
 	if !ok && sres.StockPos.Name == "" {
-		sp, serr := showMasterStatus(leadCtx, a.srcDB)
+		sp, serr := showMasterStatus(srcCtx, b.srcDB)
 		if serr != nil {
-			logging.L().Error("首启无位点且读取源库位点失败，本轮不启动管线", zap.Error(serr))
+			log.Error("首启无位点且读取源库位点失败，本轮不启动该源管线", zap.Error(serr))
 			return model.Position{}, serr
 		}
 		startPos = sp
-		logging.L().Info("首启位点取自源库当前 master 位点（无全量表）",
+		log.Info("首启位点取自源库当前 master 位点（无全量表）",
 			zap.String("file", startPos.Name), zap.Uint32("pos", startPos.Pos))
 	}
 	// PURGED 检查（06 §7）：binlog 被清理 → 拒绝启动增量，绝不带缺口运行
-	if perr := stockf.CheckPurged(leadCtx, a.srcDB, startPos); perr != nil {
-		logging.L().Error("binlog 保留检查失败，本轮不启动增量",
+	if perr := stockf.CheckPurged(srcCtx, b.srcDB, startPos); perr != nil {
+		log.Error("binlog 保留检查失败，本轮不启动增量",
 			logging.Event(logging.EventStockDone), zap.Error(perr))
 		return model.Position{}, perr
 	}
-	logging.L().Info("全量完成/跳过",
+	log.Info("全量完成/跳过",
 		logging.Event(logging.EventStockDone),
 		zap.Int64("rows", sres.Scanned), zap.Int("skipped", sres.Skipped),
 		zap.String("start_file", startPos.Name), zap.Uint32("start_pos", startPos.Pos))
 	return startPos, nil
 }
 
-// onLost 失去 leader：只读指针后立即放锁（goroutine 侧 defer 负责置 nil
-// 清理）——绝不持锁等待重型操作，elector 状态机同步调用本回调（03 §4）。
+// onLost 失去 leader（cluster 级）：cancel 共享 leadCtx → 全部源并行执行现行
+// drain 序列（停拉取 → 排空 → 刷 sink → 位点终值落盘）→ 并行等待退出
+// （每源 drain 上限 10s，总等待 15s 封顶，PRD 04 §6.2）。
+// 只读指针后立即放锁——绝不持锁等待重型操作（elector 状态机同步调用本回调）。
 func (a *app) onLost(reason string) {
 	a.leading.Store(false)
+	a.leadCtxRef.Store(nil)
 	// 失位即移交恢复责任：接管节点当选时读暂停标志重新置位（暂停闸）；
-	// 本节点若保留 opPaused 会在失位后误响应 /pipeline/resume（删标志+
-	// 带死租约重启流程，gate 失效兜底但徒增双拉窗口）
-	a.opPaused.Store(false)
-	a.pipeMu.Lock()
-	cancel := a.pipeCancel
-	done := a.pipeDone
-	a.pipeMu.Unlock()
+	// 保留 opPaused 会让失位节点误响应该源 /pipeline/resume
+	for _, src := range a.sources.all() {
+		src.opPaused.Store(false)
+	}
+	a.leadMu.Lock()
+	cancel := a.leadCancel
+	a.leadMu.Unlock()
 	a.met.LeaderState.Set(0)
 	// 先停管线（安全性最高优先级）：etcd 失联时注册更新会阻塞在 KV 重试上，
 	// 若先更新角色，03 §4.2-1 的「TTL 内停管线」会被拖成 TTL+，窗口内
 	// 旧 leader 仍在投递——故停管线永远先于注册更新
 	if cancel != nil {
-		logging.L().Warn("失去 leader，停止管线", zap.String("reason", reason))
+		logging.L().Warn("失去 leader，停止全部源管线", zap.String("reason", reason))
 		cancel()
 	}
 	// 节点角色尽力更新（有界超时：etcd 不可达时不拖慢让位/重选）
 	uctx, ucancel := context.WithTimeout(a.ctx, 2*time.Second)
 	_ = a.reg.Update(uctx, a.sess, "follower")
 	ucancel()
-	if done != nil {
+	a.waitSourcesDrain(15*time.Second, "停管线等待超时（位点可能落后，重启重放兜底）")
+}
+
+// waitSourcesDrain 等全部源流程退出（共享 deadline 封顶；每源并行 drain）。
+func (a *app) waitSourcesDrain(timeout time.Duration, warnMsg string) {
+	deadline := time.After(timeout)
+	for _, src := range a.sources.all() {
+		src.pipeMu.Lock()
+		done := src.pipeDone
+		src.pipeMu.Unlock()
+		if done == nil {
+			continue
+		}
 		select {
 		case <-done:
-		case <-time.After(15 * time.Second):
-			logging.L().Warn("停管线等待超时（位点可能落后，重启重放兜底）")
+		case <-deadline:
+			logging.L().Warn(warnMsg, zap.String("source", src.sid))
+			return
 		}
 	}
 }
 
 // runSingleLeader 单节点模式（ha.enabled: false）：
 // 跳过选举，进程直接以 leader 身份启动管线。写门槛语义不变——以 session
-// 租约在 {prefix}/leader 创建门键（与选举当选后的 leader 键同位），位点/标记
-// 写照常被租约门槛保护：session 死亡（etcd 不可达）→ 门键随租约消失 →
-// 位点写被拒 → 管线停，与集群模式失位语义一致；恢复需重启进程重走启动检查。
+// 租约在 {prefix}/leader 创建门键（与选举当选后的 leader 键同位），全部源的
+// 位点/标记写照常被租约门槛保护：session 死亡（etcd 不可达）→ 门键随租约
+// 消失 → 位点写被拒 → 管线停，与集群模式失位语义一致。
 func (a *app) runSingleLeader(ctx context.Context) error {
 	gateKey := a.prefix + "/leader"
 	if _, err := a.cli.Put(ctx, gateKey, a.nodeID, clientv3.WithLease(a.sess.Lease())); err != nil {
@@ -377,78 +431,66 @@ func (a *app) runSingleLeader(ctx context.Context) error {
 	return nil
 }
 
-// waitPipelineExit 停机等待管线完全退出（位点终值落盘）。
+// waitPipelineExit 停机等待全部源管线完全退出（位点终值落盘）。
 func (a *app) waitPipelineExit() {
-	a.pipeMu.Lock()
-	done := a.pipeDone
-	a.pipeMu.Unlock()
-	if done != nil {
-		select {
-		case <-done:
-		case <-time.After(20 * time.Second):
-			logging.L().Warn("停机等待管线退出超时（位点可能落后）")
-		}
-	}
+	a.waitSourcesDrain(20*time.Second, "停机等待源管线退出超时（位点可能落后）")
 }
 
-// pauseFlagExists 读 etcd 人工暂停标志（false, nil = 未暂停/读空）。
+// pauseFlagExists 读该源 etcd 人工暂停标志（false, nil = 未暂停/读空）。
 // 读失败按未暂停处理（fail-open）：暂停标志是人工写入的低频意图，当选本身
 // 依赖 etcd 可用，抖动窗口内两者撞上的概率可忽略；fail-close 会让节点在
 // etcd 间歇抖动时永远无法启动管线，代价不成比例。
-func (a *app) pauseFlagExists(ctx context.Context) (bool, error) {
+func (a *app) pauseFlagExists(src *sourceState, ctx context.Context) (bool, error) {
 	pctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	resp, err := a.cli.Get(pctx, a.pauseKey)
+	resp, err := a.cli.Get(pctx, src.pauseKey)
 	if err != nil {
 		return false, err
 	}
 	return resp.Count > 0, nil
 }
 
-// pausePipeline 人工暂停（/pipeline/pause 闭包）：写持久标志 → 取消管线
-// ctx（复用优雅停机：排空 + 位点终值落盘）。runLeaderFlow 退出分支看到
-// opPaused 置 paused 态。非 leader / 重复暂停返回错误。
-func (a *app) pausePipeline(ctx context.Context) error {
-	if a.opPaused.Load() {
-		return errors.New("管线已处于人工暂停状态")
+// pauseSourcePipeline 单源人工暂停（该源 /pipeline/pause 闭包）：写持久标志 →
+// 取消该源流程 ctx（复用优雅停机：排空 + 位点终值落盘；其余源不受影响）。
+// runSourceFlow 退出分支看到 opPaused 置 paused 态。非承担/重复暂停返回错误。
+func (a *app) pauseSourcePipeline(ctx context.Context, src *sourceState) error {
+	if src.opPaused.Load() {
+		return errors.New("该源管线已处于人工暂停状态")
 	}
-	if !a.leading.Load() {
-		return errors.New("本节点当前不承担管线（热备/未当选），无需暂停")
+	src.pipeMu.Lock()
+	cancelFn := src.pipeCancel
+	src.pipeMu.Unlock()
+	if cancelFn == nil {
+		return errors.New("本节点当前不承担该源管线（热备/未当选/源未就绪），无需暂停")
 	}
-	if !a.opPaused.CompareAndSwap(false, true) {
-		return errors.New("管线已处于人工暂停状态")
+	if !src.opPaused.CompareAndSwap(false, true) {
+		return errors.New("该源管线已处于人工暂停状态")
 	}
 	pctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	if _, err := a.cli.Put(pctx, a.pauseKey, time.Now().Format(time.RFC3339)); err != nil {
-		a.opPaused.Store(false)
+	if _, err := a.cli.Put(pctx, src.pauseKey, time.Now().Format(time.RFC3339)); err != nil {
+		src.opPaused.Store(false)
 		return fmt.Errorf("写入暂停标志失败: %w", err)
 	}
-	a.pipeMu.Lock()
-	cancelFn := a.pipeCancel
-	a.pipeMu.Unlock()
-	logging.L().Warn("人工暂停管线（保持 Leader，恢复走 /pipeline/resume）")
-	if cancelFn != nil {
-		cancelFn() // 优雅停机协议接管：位点终值落盘后 runLeaderFlow 置 paused
-	}
+	logging.L().Warn("人工暂停源管线（保持 Leader，恢复走该源 /pipeline/resume）",
+		zap.String("source", src.sid))
+	cancelFn() // 优雅停机协议接管：位点终值落盘后 runSourceFlow 置 paused
 	return nil
 }
 
-// resumePipeline 恢复人工暂停（/pipeline/resume 闭包）：等暂停排空完全退出
-// （位点终值落盘）→ CAS 清暂停态 → 删持久标志 → 复用当选信息重走
-// runLeaderFlow（从 etcd 位点重启——支持暂停期间改位点）。
+// resumeSourcePipeline 恢复单源人工暂停（该源 /pipeline/resume 闭包）：
+// 等暂停排空完全退出（位点终值落盘）→ CAS 清暂停态 → 删持久标志 →
+// 复用当任任期信息重走 runSourceFlow（从该源 etcd 位点重启——支持暂停期间
+// 改位点）。
 //
-// 护栏用 opPaused 而非 leading：暂停即 runLeaderFlow 退出（leading 已清位），
-// 但节点在选举层面仍是 Leader（gate/lease 存活）——「暂停中的 Leader」与
-// 「热备/失位」在 leading 上不可区分（55 组 PP-05 两轮实证：用 leading 做
-// 入口护栏会让恢复永远被自己拒绝，用它做重启前复核同样误杀——暂停态的
-// leading 恒为 false）。失位裁决信号 = session 存活 + onLost 清 opPaused：
-// 排空等待期间失位则 CAS 必然失败（零状态变更可直接重试）；CAS/删标志
-// 之后到 go 之间的毫秒级失位窗口由 gate 失效兜底（位点写被拒→熔断），
-// 新任期当选读不到标志自然启动，状态自收敛。
-func (a *app) resumePipeline(ctx context.Context) error {
-	if !a.opPaused.Load() {
-		return errors.New("管线未处于人工暂停状态，无需恢复")
+// 护栏用 opPaused 而非 leading（沿袭单源版 PP-05 实证教训）：暂停即源流程
+// 退出（leading 不变但源槽已空），「暂停中的 Leader 源」与「热备/失位」在
+// 源槽上不可区分。失位裁决信号 = session 存活 + onLost 清 opPaused：
+// 排空等待期间失位则 CAS 必然失败（零状态变更可直接重试）；CAS/删标志之后
+// 到 go 之间的毫秒级失位窗口由 gate 失效兜底（位点写被拒→熔断）。
+func (a *app) resumeSourcePipeline(ctx context.Context, src *sourceState) error {
+	if !src.opPaused.Load() {
+		return errors.New("该源管线未处于人工暂停状态，无需恢复")
 	}
 	if a.sess != nil {
 		select {
@@ -457,12 +499,10 @@ func (a *app) resumePipeline(ctx context.Context) error {
 		default:
 		}
 	}
-	// 先等暂停触发的排空完全退出（位点终值落盘）再动状态——失败可直接重试，
-	// 不产生「标志已删但流程未起」的中间态（前序实现在此之前已清 CAS+删标志，
-	// 超时后重试撞「未处于人工暂停状态」死路）
-	a.pipeMu.Lock()
-	done := a.pipeDone
-	a.pipeMu.Unlock()
+	// 先等暂停触发的排空完全退出（位点终值落盘）再动状态——失败可直接重试
+	src.pipeMu.Lock()
+	done := src.pipeDone
+	src.pipeMu.Unlock()
 	if done != nil {
 		select {
 		case <-done:
@@ -470,21 +510,21 @@ func (a *app) resumePipeline(ctx context.Context) error {
 			return errors.New("暂停排空未完成（位点落盘中），请稍后重试恢复")
 		}
 	}
-	if !a.opPaused.CompareAndSwap(true, false) { // 失位（onLost 清位）/并发恢复在此兜底
-		return errors.New("管线未处于人工暂停状态，无需恢复")
+	if !src.opPaused.CompareAndSwap(true, false) { // 失位（onLost 清位）/并发恢复在此兜底
+		return errors.New("该源管线未处于人工暂停状态，无需恢复")
 	}
 	rctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	if _, err := a.cli.Delete(rctx, a.pauseKey); err != nil {
-		a.opPaused.Store(true)
+	if _, err := a.cli.Delete(rctx, src.pauseKey); err != nil {
+		src.opPaused.Store(true)
 		return fmt.Errorf("删除暂停标志失败: %w", err)
 	}
-	info := a.curElected.Load()
-	if info == nil {
-		return errors.New("任期信息缺失，无法恢复（请重启进程）")
+	lc := a.leadCtxRef.Load()
+	if lc == nil {
+		return errors.New("任期信息缺失（已失位或未当选），无法恢复（请重启进程）")
 	}
-	logging.L().Info("恢复人工暂停的管线",
-		zap.Int64("term", info.Term))
-	go a.runLeaderFlow(*info)
+	logging.L().Info("恢复人工暂停的源管线",
+		zap.String("source", src.sid), zap.Int64("term", lc.info.Term))
+	go a.runSourceFlow(lc.ctx, src, lc.info)
 	return nil
 }

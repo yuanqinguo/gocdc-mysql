@@ -44,13 +44,14 @@ func NewDDLGate(kv *etcdx.KV, prefix string) *EtcdDDLGate {
 
 // DDLRecord 挂起/已决的 DDL 事件（08 §5：全部 DDL 事件含决策写 etcd + 审计日志）。
 type DDLRecord struct {
-	ID        string    `json:"id"` // {db.table}.{file}.{pos}（重放稳定）
+	ID        string    `json:"id"` // {db.table}.{file}.{pos}（重放稳定；key 已含源段，全局不冲突）
 	Schema    string    `json:"schema"`
 	Table     string    `json:"table"`
 	SQL       string    `json:"sql"`
 	Position  string    `json:"position"` // file:pos
 	Policy    string    `json:"policy"`   // pause | auto-degraded
 	Status    string    `json:"status"`   // pending | approve | skip | synced
+	Source    string    `json:"source,omitempty"` // 所属源 sid（多源 PRD 04 §5：创建时填充）
 	CreatedAt time.Time `json:"created_at"`
 	DecidedAt time.Time `json:"decided_at,omitempty"`
 	Note      string    `json:"note,omitempty"`

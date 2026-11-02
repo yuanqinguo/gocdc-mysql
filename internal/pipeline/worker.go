@@ -23,6 +23,7 @@ import (
 // 批不清空、绝不跳过事件）。
 type Worker struct {
 	idx         int // worker 编号（指标/日志）
+	sourceID    string // 所属源 sid（DDL 记录/指标/日志溯源，多源 PRD 04 §5）
 	queue       <-chan *EventUnit
 	rules       *CompiledRules
 	schemaMgr   *schema.Manager
@@ -42,8 +43,9 @@ type Worker struct {
 	seqs  []uint64 // batch 内事件对应 seq（成功后逐个 ack）
 }
 
-// NewWorker 构造。forceSave 可 nil（rotate 时无强制落盘——单测用）。
-func NewWorker(queue <-chan *EventUnit, idx int, rules *CompiledRules, sm *schema.Manager,
+// NewWorker 构造。forceSave 可 nil（rotate 时无强制落盘——单测用）；
+// sourceID 空 = 单源/测试形态（DDL 记录不带 source 字段）。
+func NewWorker(queue <-chan *EventUnit, idx int, sourceID string, rules *CompiledRules, sm *schema.Manager,
 	tr *transform.Transformer, sn sink.Sink, wm *Watermark, forceSave func(),
 	ddlHooks *DDLHooks, lastEventTs *atomic.Int64, met *metrics.Metrics, batchSize int, flushTimeout time.Duration, log *zap.Logger) *Worker {
 	if batchSize < 1 {
@@ -56,7 +58,7 @@ func NewWorker(queue <-chan *EventUnit, idx int, rules *CompiledRules, sm *schem
 		log = zap.NewNop()
 	}
 	return &Worker{
-		idx: idx, queue: queue, rules: rules, schemaMgr: sm, transformer: tr, sn: sn,
+		idx: idx, sourceID: sourceID, queue: queue, rules: rules, schemaMgr: sm, transformer: tr, sn: sn,
 		wm: wm, forceSave: forceSave, ddlHooks: ddlHooks, lastEventTs: lastEventTs, met: met, log: log,
 		batchSize: batchSize, flushTimeout: flushTimeout,
 	}
@@ -355,6 +357,7 @@ func (w *Worker) handleDDL(ctx context.Context, u *EventUnit) error {
 				Schema:   u.Schema,
 				SQL:      u.Query,
 				Position: fmt.Sprintf("%s:%d", u.Pos.Name, u.Pos.Pos),
+				Source:   w.sourceID,
 			}, "", "", "无法定位目标表")
 		}
 	}
@@ -371,6 +374,7 @@ func (w *Worker) handleDDL(ctx context.Context, u *EventUnit) error {
 			ID:     DDLRecordID(schemaName, tableName, u.Pos.Name, u.Pos.Pos),
 			Schema: schemaName, Table: tableName, SQL: u.Query,
 			Position: fmt.Sprintf("%s:%d", u.Pos.Name, u.Pos.Pos), Policy: "ignored",
+			Source: w.sourceID,
 		}, DecisionSkip, "非同步范围表")
 		w.ack(u.Seq)
 		return nil
@@ -390,7 +394,7 @@ func (w *Worker) handleDDL(ctx context.Context, u *EventUnit) error {
 		ID:     DDLRecordID(schemaName, tableName, u.Pos.Name, u.Pos.Pos),
 		Schema: schemaName, Table: tableName,
 		SQL: u.Query, Position: fmt.Sprintf("%s:%d", u.Pos.Name, u.Pos.Pos),
-		Policy: policy,
+		Policy: policy, Source: w.sourceID,
 	}
 
 	switch policy {
