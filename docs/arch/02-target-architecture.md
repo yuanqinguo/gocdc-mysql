@@ -68,7 +68,14 @@ flowchart TB
 
 ```
 gocdc-mysql/
-├── cmd/gocdc/main.go              # 入口：flag、信号、装配、优雅停机
+├── cmd/gocdc/                     # 入口包（package main，多文件按职责切分）：
+│   │                              #   main（flag/编排/优雅停机）、bootstrap（启动裁决/配置/
+│   │                              #   日志/指标/协调面）、components（逐源组件装配）、
+│   │                              #   lifecycle（选举驱动的管线生命周期）、supervisor（源
+│   │                              #   装配监督+退避重试）、state（进程级运行状态枢纽）、
+│   │                              #   admin（admin API 依赖装配）、migrate_keys（etcd 键
+│   │                              #   v1→v2 迁移）、verify_tables（启动目标表核对）、
+│   │                              #   source/identity（源库与节点身份辅助）
 ├── internal/
 │   ├── config/                    # 配置模型、etcd/文件加载、严格校验
 │   ├── etcdx/                     # etcd 客户端封装：KV(带重试)、选举、节点注册、TLS/auth
@@ -92,6 +99,16 @@ gocdc-mysql/
 ├── docs/arch/                     # 本文档集
 └── go.mod
 ```
+
+**分层原则**：`cmd/gocdc` 是组合根（composition root）——依赖全部
+internal 包、无 internal 包依赖它，天然位于依赖图最顶层，用
+`package main` 是 Go 对顶层的惯例。包内不拆子包：`app`/`sourceState`/
+`components` 等枢纽类型是编排层私有共享（state.go 被多个文件直接引用），
+拆包意味着全部导出（表面积暴涨）或加接口层（为不存在的复用付费）；
+同包测试可直接覆盖私有函数。重评拆包的触发信号：cmd 包规模显著增长
+（~5k 行级）、出现第二个二进制复用装配逻辑、或装配层需要独立 mock
+测试面。`internal/` 的准入标准不变：被 cmd 层以外复用、或有独立单测
+价值的逻辑才下沉。
 
 ## 4. 核心数据流
 
