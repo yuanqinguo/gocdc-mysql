@@ -130,6 +130,9 @@ func Source(ctx context.Context, db *sql.DB, opts Options) *Result {
 }
 
 // serverIDCheck 探测其它 replica 的 server_id 冲突（互踢循环防护）。
+// SHOW REPLICAS / SHOW SLAVE HOSTS 的列数与列序随版本/分支不同（4~7 列），
+// Server_id 按列名定位，其余列动态 dest 吞掉——定长 dest 会让 Scan 整行
+// 报错，冲突检测静默失效。
 func serverIDCheck(ctx context.Context, db *sql.DB, serverID uint32, r *Result) {
 	query := func(q string) (*sql.Rows, bool) {
 		rows, err := db.QueryContext(ctx, q)
@@ -143,23 +146,42 @@ func serverIDCheck(ctx context.Context, db *sql.DB, serverID uint32, r *Result) 
 		if !ok {
 			continue
 		}
-		for rows.Next() {
-			vals := make([]any, 6)
-			ptrs := make([]any, len(vals))
-			var serverIDCol int64
-			vals[0] = &serverIDCol
-			for i := 1; i < len(vals); i++ {
-				ptrs[i] = &vals[i]
+		cols, cerr := rows.Columns()
+		if cerr != nil {
+			rows.Close()
+			continue
+		}
+		serverIDIdx := -1
+		for i, c := range cols {
+			if strings.EqualFold(c, "server_id") {
+				serverIDIdx = i
+				break
 			}
-			_ = ptrs
-			if err := rows.Scan(append([]any{&serverIDCol}, vals[1:]...)...); err == nil {
-				if uint64(serverIDCol) == uint64(serverID) {
-					r.errf("server_id=%d 已被其它 replica 占用（互踢循环风险）——更换唯一 server_id", serverID)
+		}
+		if serverIDIdx < 0 {
+			rows.Close() // 无 Server_id 列（未知版本形态）：换下一条命令
+			continue
+		}
+		for rows.Next() {
+			vals := make([]any, len(cols))
+			scan := make([]any, len(cols))
+			var serverIDCol int64
+			for i := range cols {
+				if i == serverIDIdx {
+					scan[i] = &serverIDCol
+				} else {
+					scan[i] = &vals[i]
 				}
+			}
+			if err := rows.Scan(scan...); err != nil {
+				continue
+			}
+			if uint64(serverIDCol) == uint64(serverID) {
+				r.errf("server_id=%d 已被其它 replica 占用（互踢循环风险）——更换唯一 server_id", serverID)
 			}
 		}
 		rows.Close()
-		return // 任一命令可用即止
+		return // 任一命令可用（含 0 行=无其它 replica）即止
 	}
 	r.infof("server_id=%d 冲突探测跳过（SHOW REPLICAS 不可用，运维台账核对）", serverID)
 }
