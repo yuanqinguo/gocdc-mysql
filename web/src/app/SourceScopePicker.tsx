@@ -16,7 +16,8 @@ const SEVERITY_TONE: Record<SourceCardSeverity, 'ok' | 'warn' | 'danger'> = {
 
 /**
  * 源作用域选择器（多源部署常驻，聚合/单源视图通用）：下拉一步互切——
- * 选项带异常状态点（沿用总控台源卡口径），支持搜索；「全部源」即聚合视图。
+ * 选项带异常状态点（沿用总控台源卡口径）；「全部源」即聚合视图。
+ * 不做搜索过滤：源数量量级是十来个，平铺可见即可。
  * 单源部署不渲染。
  */
 export function SourceScopePicker() {
@@ -29,7 +30,6 @@ export function SourceScopePicker() {
       <Select
         size="small"
         variant="borderless"
-        showSearch
         aria-label="切换数据源"
         className="source-picker-select"
         popupMatchSelectWidth={false}
