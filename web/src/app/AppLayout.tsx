@@ -14,7 +14,7 @@ import {
 } from '@ant-design/icons'
 import { useAuth } from './auth'
 import { useSourceScope } from './sourceScope'
-import { SourceSwitcher } from './SourceSwitcher'
+import { SourceScopePicker } from './SourceScopePicker'
 import { useDDLEventsAll, useStatus } from '@/shared/api/queries'
 import type { SourceStatus } from '@/shared/api/types'
 import { BrandMark } from '@/shared/components/BrandMark'
@@ -150,7 +150,7 @@ export function AppLayout() {
       </header>
 
       <main className="shell-main">
-        <SourceSwitcher />
+        <SourceScopePicker />
         <div className="page-container"><Outlet /></div>
       </main>
 
@@ -167,7 +167,7 @@ export function AppLayout() {
           {status && <RoleChip role={status.role} />}
           {pipeline && <Chip tone={pipeline.tone} dot>{pipeline.label}</Chip>}
         </div>
-        <SourceSwitcher block />
+        <SourceScopePicker />
         <div className="drawer-meta-grid">
           <div><span>集群</span><b>{status?.cluster ?? '—'}</b></div>
           <div><span>节点</span><b>{status?.node_id ?? '—'}</b></div>

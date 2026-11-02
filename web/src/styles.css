@@ -3688,30 +3688,29 @@ a {
   }
 }
 
-/* ── 多源：源切换条 / 聚合视图 ─────────────────────────────────────── */
+/* ── 多源：源作用域选择器 / 聚合视图 ───────────────────────────────── */
 
-/* 常驻切换条（main 顶部 / Drawer 内 is-block）：全部源与各源一键切换 */
-.source-scope {
+/* 常驻选择器（多源部署）：聚合/单源视图下拉一步互切，选项带状态点 */
+.source-picker {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin: 0 0 14px;
+  gap: 6px;
+  margin: 0 0 10px;
+  font-size: 12px;
 }
 
-.source-scope.is-block {
-  margin: 0 0 14px;
-}
-
-.source-scope-label {
-  font-size: 11px;
+.source-picker-label {
+  color: var(--text-3);
   letter-spacing: 0.08em;
-  color: var(--text-tertiary, #98a6b7);
   white-space: nowrap;
 }
 
-.source-scope .ant-segmented-item {
+.source-picker-select {
   font-family: var(--font-mono, monospace);
-  font-size: 12px;
+}
+
+.source-picker-select .ant-select-selection-item {
+  padding-inline-end: 0 !important;
 }
 
 /* 聚合视图汇总条 */

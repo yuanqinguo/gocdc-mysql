@@ -101,22 +101,24 @@ function LayoutProbe() {
   return (
     <div>
       页面内容
+      <output data-testid="path">{location.pathname}</output>
       <output data-testid="search">{location.search}</output>
     </div>
   )
 }
 
-function renderLayout(sources: string[]) {
+function renderLayout(sources: string[], initialPath = '/') {
   stubStatus(sources)
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
         <ApiProvider>
-          <MemoryRouter initialEntries={['/']}>
+          <MemoryRouter initialEntries={[initialPath]}>
             <Routes>
               <Route path="/" element={<AppLayout />}>
                 <Route index element={<LayoutProbe />} />
+                <Route path="rules" element={<LayoutProbe />} />
               </Route>
             </Routes>
           </MemoryRouter>
@@ -126,24 +128,28 @@ function renderLayout(sources: string[]) {
   )
 }
 
-describe('AppLayout source switcher', () => {
-  it('hides the switcher for single-source deployments', async () => {
-    renderLayout(['only-db'])
+describe('AppLayout source scope picker', () => {
+  it('hides the picker for single-source deployments', async () => {
+    renderLayout(['only-db'], '/?source=only-db')
     await screen.findByText('页面内容')
     await waitFor(() => expect(screen.queryByText('全部源')).not.toBeInTheDocument())
+    expect(screen.queryByText('源', { selector: '.source-picker-label' })).not.toBeInTheDocument()
   })
 
-  it('shows the switcher in multi-source deployments and switches scope in place', async () => {
-    renderLayout(['order-db', 'user-db'])
+  it('switches scope in place from both the aggregate and a single-source view', async () => {
+    const { container } = renderLayout(['order-db', 'user-db'])
     await screen.findByText('页面内容')
-    await waitFor(() => expect(screen.getByText('数据源')).toBeInTheDocument())
-    expect(screen.getByText('全部源')).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByText('源', { selector: '.source-picker-label' })).toBeInTheDocument())
 
     const user = userEvent.setup()
-    await user.click(screen.getByText('user-db'))
-    await waitFor(() => expect(screen.getByTestId('search')).toHaveTextContent('source=user-db'))
+    // 聚合视图 → 直选源
+    await user.click(container.querySelector('.source-picker-select .ant-select-selector') as HTMLElement)
+    await user.click(await screen.findByText('order-db'))
+    await waitFor(() => expect(screen.getByTestId('search')).toHaveTextContent('source=order-db'))
 
-    await user.click(screen.getByText('全部源'))
+    // 单源视图 → 选「全部源」回聚合
+    await user.click(container.querySelector('.source-picker-select .ant-select-selector') as HTMLElement)
+    await user.click(await screen.findByText('全部源'))
     await waitFor(() => expect(screen.getByTestId('search')).not.toHaveTextContent('source='))
   })
 })
