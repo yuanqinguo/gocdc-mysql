@@ -205,7 +205,6 @@ Issues and PRs are welcome. For code changes run `make test` and
 |--------|
 | <img src="docs/images/wechat-contact.png" width="220" alt="WeChat QR"> | 
 
-If this project saves you a late-night incident, a coffee is always appreciated ☕
 
 ## License
 

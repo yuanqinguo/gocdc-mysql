@@ -191,8 +191,6 @@ Kafka）与端到端 HA 演练。目前是 v0.x：v1.0 前 API 与配置 schema 
 |----------|
 | <img src="docs/images/wechat-contact.png" width="220" alt="微信二维码">  |
 
-如果这个项目帮你省掉了一次深夜救火，请作者喝杯咖啡 ☕
-
 ## License
 
 [Apache-2.0](LICENSE)
