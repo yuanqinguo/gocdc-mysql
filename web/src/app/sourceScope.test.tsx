@@ -132,7 +132,7 @@ describe('AppLayout source scope picker', () => {
   it('hides the picker for single-source deployments', async () => {
     renderLayout(['only-db'], '/?source=only-db')
     await screen.findByText('页面内容')
-    await waitFor(() => expect(screen.queryByText('全部源')).not.toBeInTheDocument())
+    await waitFor(() => expect(screen.queryByText('全部数据源')).not.toBeInTheDocument())
     expect(screen.queryByText('数据源', { selector: '.source-picker-label' })).not.toBeInTheDocument()
   })
 
@@ -147,9 +147,9 @@ describe('AppLayout source scope picker', () => {
     await user.click(await screen.findByText('order-db'))
     await waitFor(() => expect(screen.getByTestId('search')).toHaveTextContent('source=order-db'))
 
-    // 单源视图 → 选「全部源」回聚合
+    // 单源视图 → 选「全部数据源」回聚合
     await user.click(container.querySelector('.source-picker-select .ant-select-selector') as HTMLElement)
-    await user.click(await screen.findByText('全部源'))
+    await user.click(await screen.findByText('全部数据源'))
     await waitFor(() => expect(screen.getByTestId('search')).not.toHaveTextContent('source='))
   })
 })

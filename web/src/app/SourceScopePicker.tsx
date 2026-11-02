@@ -16,7 +16,7 @@ const SEVERITY_TONE: Record<SourceCardSeverity, 'ok' | 'warn' | 'danger'> = {
 
 /**
  * 源作用域选择器（多源部署常驻，聚合/单源视图通用）：下拉一步互切——
- * 选项带异常状态点（沿用总控台源卡口径）；「全部源」即聚合视图。
+ * 选项带异常状态点（沿用总控台源卡口径）；「全部数据源」即聚合视图。
  * 不做搜索过滤：源数量量级是十来个，平铺可见即可。
  * 单源部署不渲染。
  */
@@ -36,7 +36,7 @@ export function SourceScopePicker() {
         value={currentSid ?? ALL}
         onChange={(value) => setSid(value === ALL ? null : value)}
         options={[
-          { value: ALL, label: <Chip tone="muted">全部源</Chip> },
+          { value: ALL, label: <Chip tone="muted">全部数据源</Chip> },
           ...(status?.sources ?? []).map((source) => ({
             value: source.id,
             label: <Chip tone={SEVERITY_TONE[classifySource(source)]} dot>{source.id}</Chip>,

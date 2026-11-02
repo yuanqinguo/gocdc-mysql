@@ -46,7 +46,7 @@ export function AuditPage() {
       eyebrow={currentSid ? `系统 / 操作审计 · 源 ${currentSid}` : '系统 / 操作审计'}
       title="审计日志"
       description={currentSid
-        ? `源「${currentSid}」的管理操作记录（已按源过滤）；失败操作同样留痕。查看全部源请切回「全部源」。`
+        ? `源「${currentSid}」的管理操作记录（已按源过滤）；失败操作同样留痕。查看全部数据源请切回「全部数据源」。`
         : '最近 100 条管理操作记录，由服务端写入 etcd；失败操作同样留痕。「源」列为空表示集群级操作。'}
       extra={<Button icon={<ReloadOutlined />} onClick={() => void refetch()}>刷新</Button>}
     />
