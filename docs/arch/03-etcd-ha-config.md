@@ -185,6 +185,7 @@ follower 侧：
 ### 4.2 防脑裂与双写
 
 1. **leadership 复核**：leader 的 watchdog 周期性确认 lease 存活与 election key 归属；与 etcd 分区 → 复核失败 → **立即停止管线**（先于新 leader 接任，TTL 10s 内完成）。双写窗口收敛为「最长 TTL 的投递重叠」，由下游幂等（MySQL upsert；MQ 重复消息）兜底——这是文档化的明确语义，不声称重叠窗口为零。
+   **残留风险（明示）**：幂等消化的是**重复**，不是**乱序回退**——旧 leader 失位判定的间隙里，其在途的 sink 写入可能晚于新 leader 对同一行的更新落地（last-writer-wins），该行值短暂回退到旧值，直到该行下次被变更才收敛。「不丢」承诺不受影响；要求单行写序强一致（而非最终收敛）的场景，需在目标端自行 fencing（如按 `leader_term` 的 guard 列拒绝旧 term 写入），本工具不内置。
 2. **位点写门槛**：PositionPersister 每次写 etcd 前用事务 `If(lease alive)` 语义（Compare lease ID）；lease 失效则位点写不进去，新 leader 的位点推进不被旧 leader 覆盖。**同样的 lease 门槛也适用于全量标记 `stock/*` 的写入**——防止分区旧 leader 在失去领导权后继续推进/覆盖全量状态（06 文档 §5）。
 3. **term 记录**：每次当选以 election key 的 revision 为 term，写入节点注册值与日志；位点值附带 `leader_term`，便于排障时判断是否跨主。
 4. **停机让位**：SIGTERM 处理顺序 = 停拉取 → 排空队列 → 刷 sink → 保存位点 → `Resign`。配合 `resign_on_shutdown`，滚动发布时切换时间 ≈ 排空时间，而非等 TTL。

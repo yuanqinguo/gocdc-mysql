@@ -38,7 +38,11 @@ lightweight middle ground:
   v1 configs upgrade in place (auto-wrapped + etcd keys migrated).
 - **Built-in HA** — etcd leader election; if the leader is killed (`kill -9`), a
   hot standby takes over within lease TTL + 10s and **no events are lost**
-  (positions live in etcd, MySQL sink is idempotent upsert).
+  (positions live in etcd, MySQL sink is idempotent upsert). During the
+  overlap window (≤ lease TTL) an old leader's in-flight writes may land after
+  the new leader's update to the same row — the row converges on its next
+  change (idempotency absorbs duplicates, not ordering); strict per-write
+  fencing is a target-side concern (see arch 03 §4.2).
 - **Parallel pipeline with watermark positions** — binlog is parsed once and
   sharded by `schema.table` across N workers; strict per-table ordering, and the
   checkpoint only advances past fully-flushed events.
