@@ -65,7 +65,7 @@ function SingleSourceRules({ sid }: { sid: string }) {
       eyebrow={`复制 / 规则目录 · 源 ${sid}`}
       title="复制规则"
       description={`源「${sid}」组形态白名单的库级摘要与逐表生效视图；列表来自后端编译产物，前端不做继承推算。`}
-      extra={<Button icon={<ReloadOutlined />} onClick={() => void refetch()}>刷新规则</Button>}
+      extra={<Button icon={<ReloadOutlined />} onClick={() => void refetch()}>刷新</Button>}
     />
     <Callout tone="info" title="规则视图说明">
       点击源库下钻查看该库全部表规则；当前接口提供规则视图与单表重跑/抽样对账，规则运行状态、暂停/恢复操作尚未由后端 API 提供。
@@ -105,7 +105,7 @@ function AllSourcesRules() {
       eyebrow="复制 / 规则目录"
       title="复制规则"
       description="按源分组的生效规则只读视图；需要重跑全量或抽样对账时，从源选择器进入单源视图操作。"
-      extra={<Button icon={<ReloadOutlined />} onClick={() => void sources.refetch()}>刷新源清单</Button>}
+      extra={<Button icon={<ReloadOutlined />} onClick={() => void sources.refetch()}>刷新</Button>}
     />
     <Callout tone="info" title="规则视图说明">
       展开各源查看该源的库级摘要与表规则；单表重跑/抽样对账属于源作用域操作，请切换到单源视图执行。

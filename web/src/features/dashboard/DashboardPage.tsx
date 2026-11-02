@@ -147,7 +147,7 @@ export function DashboardPage() {
         description={effectiveSid
           ? `实时观察源「${effectiveSid}」的同步管线、节点角色与持久化位点。复杂性能趋势请在 Grafana 查看。`
           : '实时观察全部数据源的同步管线、节点角色与持久化位点。复杂性能趋势请在 Grafana 查看。'}
-        extra={<Button icon={<ReloadOutlined />} onClick={() => void refetchStatus()}>刷新遥测</Button>}
+        extra={<Button icon={<ReloadOutlined />} onClick={() => void refetchStatus()}>刷新</Button>}
       />
       {statusError ? <ErrorState error={statusError} onRetry={() => void refetchStatus()} /> : statusPending || !status ? <LoadingState rows={4} /> : (
         effectiveSid

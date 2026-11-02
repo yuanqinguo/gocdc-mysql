@@ -48,7 +48,7 @@ export function AuditPage() {
       description={currentSid
         ? `源「${currentSid}」的管理操作记录（已按源过滤）；失败操作同样留痕。查看全部源请切回「全部源」。`
         : '最近 100 条管理操作记录，由服务端写入 etcd；失败操作同样留痕。「源」列为空表示集群级操作。'}
-      extra={<Button icon={<ReloadOutlined />} onClick={() => void refetch()}>刷新记录</Button>}
+      extra={<Button icon={<ReloadOutlined />} onClick={() => void refetch()}>刷新</Button>}
     />
     {error ? <ErrorState error={error} onRetry={() => void refetch()} /> : isPending ? <LoadingState /> : <>
       <div className="audit-summary">

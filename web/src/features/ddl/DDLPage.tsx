@@ -87,7 +87,7 @@ export function DDLPage() {
       description={effectiveSid
         ? `源「${effectiveSid}」的结构变更在此等待人工决策；审批状态由集群通过 etcd 共享。`
         : '全部源的结构变更在此等待人工决策（按源分组排序）；审批状态由集群通过 etcd 共享。'}
-      extra={<Button icon={<ReloadOutlined />} onClick={() => void refetch()}>刷新事件</Button>}
+      extra={<Button icon={<ReloadOutlined />} onClick={() => void refetch()}>刷新</Button>}
     />
     {!error && !isPending && (
       <div className={`queue-readout ${records.length ? 'has-pending' : 'is-clear'}`}>
