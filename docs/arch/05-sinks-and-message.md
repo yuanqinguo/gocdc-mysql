@@ -167,10 +167,7 @@ DELETE  →  批量:
 | 可重试错误（网络超时、broker not available、lock wait timeout…） | sink 内指数退避重试（100ms×2^n，上限 30s，持续到 `sink_retry_max` 默认 10 次或恢复） |
 | 不可重试错误（SQL 语法、消息超限、认证拒绝） | 立即熔断：规则置 PAUSED + 指标/告警，位点停推，等待人工修复后 resume（Web/CLI）——**绝不静默跳过** |
 | sink 长时间不可用 | 熔断期间 worker 停 ack → 队列填满 → 反压（09）；恢复后从断点续投 |
-| **消息超限**（事件序列化后 > `max_message_bytes`，如巨型 BLOB 行） | MQ sink 侧预检：**不可重试 poison**——默认整规则 PAUSED + 告警等人工处理；显式配置 `dead_letter.enabled` 时投递到 DLQ（见 07 §6）后 ack 继续 |
+| **消息超限**（事件序列化后 > `max_message_bytes`，如巨型 BLOB 行） | MQ sink 侧预检：**不可重试 poison**——整规则 PAUSED + 告警等人工处理（修复后 resume 或调整预检配置） |
 | DDL/结构导致的持续失败（目标列缺失等） | 不可重试 → PAUSED + 告警（与 08 pause 语义一致） |
 
-### DLQ 语义（`dead_letter`，默认关闭，逃生通道）
-
-- 载荷 = 完整事件 JSON + 失败原因 + sink 名 + 重试轨迹，写入 etcd（`{prefix}/deadletter/{seq}`，保留最近 N 条）或专用 topic；同时 ack 放行水位线。
-- **明示代价**：DLQ 放行 = 接受该事件不落目标（MySQL sink 语义下会破坏终态一致，因此 **MySQL sink 不支持 DLQ 放行**，只有 MQ sink 可用）；生产默认关闭，仅在「单条脏数据卡住全管线」且下游可容忍缺失时临时开启。
+Poison 事件没有 DLQ 逃生通道：放行 = 接受该事件不落目标，MySQL sink 语义下破坏终态一致——统一走 PAUSED + 人工介入（修复数据/结构后 resume），绝不静默跳过。

@@ -247,6 +247,10 @@ func (a *app) runSourceFlow(leadCtx context.Context, src *sourceState, info elec
 	src.setState(api.PipeRunning, "")
 	pl := a.newPipeline(src, info.Term)
 	src.curPipeline.Store(pl)
+	// 清上一任期的全部 paused 遗留（fatal/convert/sink 熔断/重启重放的 ddl）：
+	// gauge 只置 1 不清零会让 critical 告警在恢复后永久误报；本轮运行期新置入
+	// 的标记不受影响（fatal 的 Set 在 Run 返回之后发生）。
+	a.met.ClearPipelinePaused(src.sid)
 	log.Info("leader 源管线启动",
 		logging.Event(logging.EventPipelineStart),
 		zap.Int64("term", info.Term),

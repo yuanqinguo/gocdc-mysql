@@ -15,12 +15,10 @@
      "targets": [{"expr": "gocdc_position_lag_seconds"}]},
     {"type": "stat", "title": "与源库字节差", "gridPos": {"x":12,"y":0,"w":4,"h":4},
      "targets": [{"expr": "gocdc_master_position_lag_bytes"}]},
-    {"type": "stat", "title": "暂停规则", "gridPos": {"x":16,"y":0,"w":4,"h":4},
+    {"type": "stat", "title": "暂停规则", "gridPos": {"x":16,"y":0,"w":8,"h":4},
      "targets": [{"expr": "sum(gocdc_pipeline_paused)"}],
      "fieldConfig": {"defaults": {"thresholds": {"steps": [
         {"color":"green","value":null},{"color":"red","value":1}]}}}},
-    {"type": "stat", "title": "DLQ 事件(应≈0)", "gridPos": {"x":20,"y":0,"w":4,"h":4},
-     "targets": [{"expr": "sum(gocdc_deadletter_total)"}]},
 
     {"type": "timeseries", "title": "吞吐（各 sink，5m 速率）", "gridPos": {"x":0,"y":4,"w":12,"h":8},
      "targets": [{"expr": "sum by (sink) (rate(gocdc_events_out_total[5m]))"}]},

@@ -15,7 +15,6 @@ var expectedMetrics = []string{
 	"gocdc_events_failed_total",
 	"gocdc_bytes_total",
 	"gocdc_convert_errors_total",
-	"gocdc_deadletter_total",
 	"gocdc_message_oversize_total",
 	"gocdc_event_lag_seconds",
 	"gocdc_position_lag_seconds",
@@ -23,7 +22,6 @@ var expectedMetrics = []string{
 	"gocdc_sink_batch_duration_seconds",
 	"gocdc_sink_retry_total",
 	"gocdc_worker_queue_depth",
-	"gocdc_worker_queue_oldest_seconds",
 	"gocdc_watermark_seq",
 	"gocdc_last_saved_seq",
 	"gocdc_pipeline_paused",
@@ -32,7 +30,6 @@ var expectedMetrics = []string{
 	"gocdc_stock_rows_total",
 	"gocdc_leader_state",
 	"gocdc_leader_term",
-	"gocdc_etcd_request_duration_seconds",
 	"gocdc_sources",
 	"gocdc_source_up",
 }
@@ -46,7 +43,6 @@ func initAll(m *Metrics) {
 	m.EventsFailed.WithLabelValues(sid, "mysql", "timeout").Inc()
 	m.BytesOut.WithLabelValues(sid, "mysql").Add(1)
 	m.ConvertErrors.WithLabelValues(sid, "d", "t", "c", "fail_event").Inc()
-	m.DeadLetter.WithLabelValues(sid, "d", "t", "kafka", "oversize").Inc()
 	m.MessageOversize.WithLabelValues(sid, "d", "t", "kafka").Inc()
 	m.EventLagSeconds.WithLabelValues(sid).Set(0)
 	m.PositionLagSeconds.WithLabelValues(sid).Set(0)
@@ -54,14 +50,12 @@ func initAll(m *Metrics) {
 	m.SinkBatchDuration.WithLabelValues(sid, "mysql", "d", "t").Observe(0.01)
 	m.SinkRetryTotal.WithLabelValues(sid, "mysql").Inc()
 	m.WorkerQueueDepth.WithLabelValues(sid, "0").Set(0)
-	m.WorkerQueueOldestSecond.WithLabelValues(sid, "0").Set(0)
 	m.WatermarkSeq.WithLabelValues(sid).Set(0)
 	m.LastSavedSeq.WithLabelValues(sid).Set(0)
 	m.PipelinePaused.WithLabelValues(sid, "d", "t", "ddl").Set(0)
 	m.PositionSaveFailures.WithLabelValues(sid).Inc()
 	m.StockProgressRatio.WithLabelValues(sid, "d", "t").Set(0)
 	m.StockRowsTotal.WithLabelValues(sid, "d", "t").Inc()
-	m.EtcdRequestSeconds.WithLabelValues("put").Observe(0.001)
 	m.Sources.WithLabelValues("ready").Set(1)
 	m.SourceUp.WithLabelValues(sid).Set(1)
 }
@@ -95,7 +89,6 @@ func TestMetricLabels(t *testing.T) {
 	m.WorkerQueueDepth.WithLabelValues(sid, "0").Set(3)
 	m.PipelinePaused.WithLabelValues(sid, "db1", "t1", "ddl").Set(1)
 	m.EventLagSeconds.WithLabelValues(sid).Set(1)
-	m.EtcdRequestSeconds.WithLabelValues("put").Observe(0.002)
 	m.LeaderState.Set(1)
 
 	families, _ := m.registry.Gather()
@@ -195,5 +188,56 @@ func TestMasterLagPerSource(t *testing.T) {
 	}
 	if _, ok := m.MasterPositionLagBytesValue("src-b"); ok {
 		t.Fatal("src-b 未采样应返回 false")
+	}
+}
+
+// gatherPaused 汇总当前 gocdc_pipeline_paused 各 series 的值
+//（"source|db|table|reason" → 值；label 取值按名定位，不依赖 Gather 排序）。
+func gatherPaused(t *testing.T, m *Metrics) map[string]float64 {
+	t.Helper()
+	families, err := m.registry.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]float64{}
+	for _, mf := range families {
+		if mf.GetName() != "gocdc_pipeline_paused" {
+			continue
+		}
+		for _, pm := range mf.Metric {
+			lv := map[string]string{}
+			for _, l := range pm.Label {
+				lv[l.GetName()] = l.GetValue()
+			}
+			key := strings.Join([]string{lv["source"], lv["db"], lv["table"], lv["reason"]}, "|")
+			out[key] = pm.GetGauge().GetValue()
+		}
+	}
+	return out
+}
+
+// TestClearPipelinePaused 按源清零：管线重启清除上一任期全部 paused 标记，
+// 其余源不受影响——不清零会让 GocdcPipelinePaused（critical）在恢复后永久误报。
+func TestClearPipelinePaused(t *testing.T) {
+	m := New()
+	m.PipelinePaused.WithLabelValues("src-a", "db1", "t1", "ddl").Set(1)
+	m.PipelinePaused.WithLabelValues("src-a", "db2", "t2", "fatal").Set(1)
+	m.PipelinePaused.WithLabelValues("src-b", "db1", "t1", "sink").Set(1)
+
+	m.ClearPipelinePaused("src-a")
+
+	got := gatherPaused(t, m)
+	if len(got) != 1 {
+		t.Fatalf("src-a 清零后应只剩 src-b 一条 series: %v", got)
+	}
+	if v := got["src-b|db1|t1|sink"]; v != 1 {
+		t.Fatalf("src-b 的 paused 标记不应被波及: %v", got)
+	}
+
+	// 再置入 + 再清：幂等可反复调用（管线每轮重启前清理）
+	m.PipelinePaused.WithLabelValues("src-a", "db1", "t1", "convert").Set(1)
+	m.ClearPipelinePaused("src-a")
+	if got = gatherPaused(t, m); len(got) != 1 {
+		t.Fatalf("重复清理后应仍只剩 src-b: %v", got)
 	}
 }

@@ -463,6 +463,11 @@ func (w *Worker) pauseOnDDL(ctx context.Context, u *EventUnit, rec DDLRecord, sc
 	}
 	if w.met != nil {
 		w.met.PipelinePaused.WithLabelValues(w.sourceID, schemaName, tableName, "ddl").Set(1)
+		// 决策返回即清（本函数所有返回路径）：gauge 只置 1 不清零的话，
+		// DDL 审批放行后 GocdcPipelinePaused（critical）会永久误报。
+		// 按自身参数清同一标签组（含 schemaName/tableName 为空的无法定位路径）；
+		// 管线重启的整源清理在 lifecycle（ClearPipelinePaused）。
+		defer w.met.PipelinePaused.DeleteLabelValues(w.sourceID, schemaName, tableName, "ddl")
 	}
 	if w.ddlHooks == nil || w.ddlHooks.Gate == nil {
 		w.log.Warn("DDL 暂停（无审批 gate，管线停止）",

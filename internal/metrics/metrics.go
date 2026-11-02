@@ -24,7 +24,6 @@ type Metrics struct {
 	EventsFailed    *prometheus.CounterVec // source, sink, reason
 	BytesOut        *prometheus.CounterVec // source, sink
 	ConvertErrors   *prometheus.CounterVec // source, db, table, column, action(04 §7 on_convert_error)
-	DeadLetter      *prometheus.CounterVec // source, db, table, sink, reason（07 §6，恒应≈0）
 	MessageOversize *prometheus.CounterVec // source, db, table, sink（05 §7 预检）
 
 	// ── 1.2 延迟（source 维度）──
@@ -40,19 +39,17 @@ type Metrics struct {
 	masterLagSamples map[string]float64
 
 	// ── 1.3 管线与资源（source, …）──
-	WorkerQueueDepth        *prometheus.GaugeVec // source, worker（背压前兆）
-	WorkerQueueOldestSecond *prometheus.GaugeVec // source, worker：队列最老事件滞留时长
-	WatermarkSeq            *prometheus.GaugeVec // source：连续水位
-	LastSavedSeq            *prometheus.GaugeVec // source：已落盘位点 seq（差值=未落盘窗口）
-	PipelinePaused          *prometheus.GaugeVec // source, db, table, reason（ddl/pause/sink 熔断）
-	PositionSaveFailures    *prometheus.CounterVec // source：etcd 位点写失败（03 §5.2 告警源）
+	WorkerQueueDepth     *prometheus.GaugeVec // source, worker（背压前兆）
+	WatermarkSeq         *prometheus.GaugeVec // source：连续水位
+	LastSavedSeq         *prometheus.GaugeVec // source：已落盘位点 seq（差值=未落盘窗口）
+	PipelinePaused       *prometheus.GaugeVec // source, db, table, reason（ddl/pause/sink 熔断）
+	PositionSaveFailures *prometheus.CounterVec // source：etcd 位点写失败（03 §5.2 告警源）
 
-	// ── 1.4 全量 / HA / etcd ──
+	// ── 1.4 全量 / HA ──
 	StockProgressRatio *prometheus.GaugeVec   // source, db, table，0~1
 	StockRowsTotal     *prometheus.CounterVec // source, db, table
 	LeaderState        prometheus.Gauge       // 1=leader（cluster 级，不带 source）
 	LeaderTerm         prometheus.Gauge       // election revision（cluster 级）
-	EtcdRequestSeconds *prometheus.HistogramVec // op（cluster 级）
 
 	// ── 多源新增（PRD 07 §1）──
 	Sources  *prometheus.GaugeVec // state：按 ready/failed/stopped 计数的源数
@@ -73,8 +70,6 @@ func New() *Metrics {
 		"下发字节量", "source", "sink")
 	m.ConvertErrors = newCounter(m.registry, "gocdc_convert_errors_total",
 		"值转换异常数（04 §7 on_convert_error）", "source", "db", "table", "column", "action")
-	m.DeadLetter = newCounter(m.registry, "gocdc_deadletter_total",
-		"进入 DLQ 的事件数（恒应≈0，07 §6）", "source", "db", "table", "sink", "reason")
 	m.MessageOversize = newCounter(m.registry, "gocdc_message_oversize_total",
 		"消息超限事件数（05 §7 发送前预检）", "source", "db", "table", "sink")
 
@@ -91,8 +86,6 @@ func New() *Metrics {
 
 	m.WorkerQueueDepth = newGauge(m.registry, "gocdc_worker_queue_depth",
 		"分片队列深度（背压前兆）", "source", "worker")
-	m.WorkerQueueOldestSecond = newGauge(m.registry, "gocdc_worker_queue_oldest_seconds",
-		"队列最老事件滞留时长（秒）", "source", "worker")
 	m.WatermarkSeq = newGauge(m.registry, "gocdc_watermark_seq",
 		"连续水位 seq", "source")
 	m.LastSavedSeq = newGauge(m.registry, "gocdc_last_saved_seq",
@@ -110,8 +103,6 @@ func New() *Metrics {
 		"leader 状态（1=leader，0=follower/无主）")
 	m.LeaderTerm = newGaugeSingle(m.registry, "gocdc_leader_term",
 		"当前 leader term（election revision）")
-	m.EtcdRequestSeconds = newHistogram(m.registry, "gocdc_etcd_request_duration_seconds",
-		"etcd 操作耗时", prometheus.ExponentialBuckets(0.001, 2, 12), "op")
 
 	m.Sources = newGauge(m.registry, "gocdc_sources",
 		"按状态计数的源数（ready/failed/stopped）", "state")
@@ -165,6 +156,19 @@ func (m *Metrics) MasterPositionLagBytesValue(source string) (float64, bool) {
 	defer m.masterLagMu.Unlock()
 	v, ok := m.masterLagSamples[source]
 	return v, ok
+}
+
+// ClearPipelinePaused 清除该源全部 paused 标记（管线重启时调用）。
+//
+// gauge 只在进入 paused 时置 1：DDL 审批放行/人工恢复后若不清零，
+// GocdcPipelinePaused（critical）会永久误报，把真暂停淹没在告警疲劳里。
+// 清理时机两处：管线重启前（清上一任期全部遗留，含 fatal）与 pauseOnDDL
+// 返回时（worker 侧只清自己置入的那条——等待期结束后管线继续运行）。
+func (m *Metrics) ClearPipelinePaused(source string) {
+	if m == nil {
+		return
+	}
+	m.PipelinePaused.DeletePartialMatch(prometheus.Labels{"source": source})
 }
 
 func newHistogram(r *prometheus.Registry, name, help string, buckets []float64, labels ...string) *prometheus.HistogramVec {

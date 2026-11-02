@@ -24,11 +24,6 @@ groups:
         for: 0m
         labels: {severity: warning}
         annotations: {summary: "源 {{ $labels.source }} 位点保存失败（etcd 抖动/门槛拒绝）"}
-      - alert: GocdcDeadLetterUsed
-        expr: increase(gocdc_deadletter_total[10m]) > 0
-        for: 0m
-        labels: {severity: critical}
-        annotations: {summary: "DLQ 启用（逃生通道被使用，需排查 poison）"}
       - alert: GocdcConvertErrors
         expr: increase(gocdc_convert_errors_total[10m]) > 0
         for: 0m

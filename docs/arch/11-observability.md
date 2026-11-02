@@ -13,7 +13,6 @@
 | `gocdc_events_failed_total` | Counter | sink, reason | sink 投递失败数（含重试耗尽） |
 | `gocdc_bytes_total` | Counter | sink | 下发字节量（容量规划） |
 | `gocdc_convert_errors_total` | Counter | db, table, column, action | 值转换异常数（§04-7 on_convert_error） |
-| `gocdc_deadletter_total` | Counter | db, table, sink, reason | 进入 DLQ 的事件数（07 §6，恒应≈0） |
 | `gocdc_message_oversize_total` | Counter | db, table, sink | 消息超限事件数（05 §7 预检） |
 
 ### 1.2 延迟
@@ -31,9 +30,8 @@
 | 指标 | 类型 | 说明 |
 |------|------|------|
 | `gocdc_worker_queue_depth` | GaugeVec(worker) | 分片队列深度（背压前兆） |
-| `gocdc_worker_queue_oldest_seconds` | Gauge | 队列最老事件滞留时长 |
 | `gocdc_watermark_seq` / `gocdc_last_saved_seq` | Gauge | 水位与已落盘位点（差值=未落盘窗口） |
-| `gocdc_pipeline_paused` | GaugeVec(db, table, reason) | 暂停状态（ddl/pause 策略/sink 熔断） |
+| `gocdc_pipeline_paused` | GaugeVec(source, db, table, reason) | 暂停状态（ddl/pause 策略/sink 熔断/致命退出）；置 1 后由恢复路径清零（DDL 决策返回、管线重启），不残留旧标记 |
 | `gocdc_position_save_failures_total` | Counter | etcd 位点写失败（03 §5.2 告警源） |
 
 ### 1.4 全量 / HA / 进程
@@ -44,7 +42,6 @@
 | `gocdc_stock_rows_total` | CounterVec | 全量已扫描行数 |
 | `gocdc_leader_state` | Gauge | 1=leader |
 | `gocdc_leader_term` | Gauge | election revision（切主可见） |
-| `gocdc_etcd_request_duration_seconds` | HistogramVec(op) | etcd 操作耗时 |
 | 标准进程指标 | — | go_*, process_*（自动） |
 
 ## 2. 健康检查
