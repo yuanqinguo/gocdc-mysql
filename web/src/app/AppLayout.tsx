@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react'
-import { Avatar, Drawer, Dropdown, Select, type MenuProps } from 'antd'
+import { Avatar, Drawer, Dropdown, type MenuProps } from 'antd'
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
   AimOutlined,
@@ -14,6 +14,7 @@ import {
 } from '@ant-design/icons'
 import { useAuth } from './auth'
 import { useSourceScope } from './sourceScope'
+import { SourceSwitcher } from './SourceSwitcher'
 import { useDDLEventsAll, useStatus } from '@/shared/api/queries'
 import type { SourceStatus } from '@/shared/api/types'
 import { BrandMark } from '@/shared/components/BrandMark'
@@ -60,7 +61,7 @@ export function AppLayout() {
   const { logout, session } = useAuth()
   const { data: status, isError: statusUnavailable } = useStatus()
   const { data: ddlEvents = [] } = useDDLEventsAll()
-  const { currentSid, setSid, sourceCount } = useSourceScope()
+  const { currentSid } = useSourceScope()
   const location = useLocation()
   const navigate = useNavigate()
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
@@ -117,16 +118,6 @@ export function AppLayout() {
             <span className="meta-cell"><span>节点</span><b>{status?.node_id ?? '—'}</b></span>
             <span className="meta-cell"><span>版本</span><b>{status?.version || '—'}</b></span>
             <span className={`health-pill is-${apiState}`}><i />{apiLabel}</span>
-            {sourceCount > 1 && (
-              <Select
-                size="small"
-                className="source-select"
-                aria-label="切换数据源"
-                value={currentSid ?? ''}
-                onChange={(value) => setSid(value || null)}
-                options={[{ value: '', label: '全部源' }, ...sources.map((source) => ({ value: source.id, label: source.id }))]}
-              />
-            )}
             {status && <RoleChip role={status.role} />}
             <span className="meta-divider" />
             <Dropdown trigger={['click']} menu={{ items: userMenuItems, onClick: ({ key }) => { if (key === 'logout') handleLogout() } }}>
@@ -159,6 +150,7 @@ export function AppLayout() {
       </header>
 
       <main className="shell-main">
+        <SourceSwitcher />
         <div className="page-container"><Outlet /></div>
       </main>
 
@@ -175,6 +167,7 @@ export function AppLayout() {
           {status && <RoleChip role={status.role} />}
           {pipeline && <Chip tone={pipeline.tone} dot>{pipeline.label}</Chip>}
         </div>
+        <SourceSwitcher block />
         <div className="drawer-meta-grid">
           <div><span>集群</span><b>{status?.cluster ?? '—'}</b></div>
           <div><span>节点</span><b>{status?.node_id ?? '—'}</b></div>

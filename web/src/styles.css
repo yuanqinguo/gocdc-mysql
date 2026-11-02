@@ -3688,16 +3688,30 @@ a {
   }
 }
 
-/* ── 多源：顶栏源选择器 / 聚合视图 ───────────────────────────────────── */
+/* ── 多源：源切换条 / 聚合视图 ─────────────────────────────────────── */
 
-.source-select.ant-select {
-  min-width: 128px;
+/* 常驻切换条（main 顶部 / Drawer 内 is-block）：全部源与各源一键切换 */
+.source-scope {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 14px;
 }
 
-.source-select .ant-select-selector {
-  border-radius: 4px !important;
-  font-family: var(--font-mono);
-  font-size: 10px;
+.source-scope.is-block {
+  margin: 0 0 14px;
+}
+
+.source-scope-label {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--text-tertiary, #98a6b7);
+  white-space: nowrap;
+}
+
+.source-scope .ant-segmented-item {
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
 }
 
 /* 聚合视图汇总条 */

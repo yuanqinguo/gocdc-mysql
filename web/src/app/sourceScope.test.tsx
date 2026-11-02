@@ -96,6 +96,16 @@ describe('useSourceScope', () => {
   })
 })
 
+function LayoutProbe() {
+  const location = useLocation()
+  return (
+    <div>
+      页面内容
+      <output data-testid="search">{location.search}</output>
+    </div>
+  )
+}
+
 function renderLayout(sources: string[]) {
   stubStatus(sources)
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -106,7 +116,7 @@ function renderLayout(sources: string[]) {
           <MemoryRouter initialEntries={['/']}>
             <Routes>
               <Route path="/" element={<AppLayout />}>
-                <Route index element={<div>页面内容</div>} />
+                <Route index element={<LayoutProbe />} />
               </Route>
             </Routes>
           </MemoryRouter>
@@ -116,18 +126,24 @@ function renderLayout(sources: string[]) {
   )
 }
 
-describe('AppLayout source selector', () => {
-  it('hides the selector for single-source deployments', async () => {
+describe('AppLayout source switcher', () => {
+  it('hides the switcher for single-source deployments', async () => {
     renderLayout(['only-db'])
     await screen.findByText('页面内容')
-    expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
+    await waitFor(() => expect(screen.queryByText('全部源')).not.toBeInTheDocument())
   })
 
-  it('shows the selector with an all-sources option in multi-source deployments', async () => {
-    const { container } = renderLayout(['order-db', 'user-db'])
+  it('shows the switcher in multi-source deployments and switches scope in place', async () => {
+    renderLayout(['order-db', 'user-db'])
     await screen.findByText('页面内容')
-    await waitFor(() => expect(container.querySelector('.source-select')).toBeInTheDocument())
-    await userEvent.setup().click(container.querySelector('.source-select') as HTMLElement)
-    await waitFor(() => expect(screen.getByTitle('全部源')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('数据源')).toBeInTheDocument())
+    expect(screen.getByText('全部源')).toBeInTheDocument()
+
+    const user = userEvent.setup()
+    await user.click(screen.getByText('user-db'))
+    await waitFor(() => expect(screen.getByTestId('search')).toHaveTextContent('source=user-db'))
+
+    await user.click(screen.getByText('全部源'))
+    await waitFor(() => expect(screen.getByTestId('search')).not.toHaveTextContent('source='))
   })
 })
