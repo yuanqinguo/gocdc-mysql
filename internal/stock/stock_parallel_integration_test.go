@@ -152,7 +152,7 @@ func TestIntegrationStockParallelSameName(t *testing.T) {
 	defer msink.Close(ctx)
 
 	svc := New(srcDB, schemaMgr, tr, msink, markers,
-		config.Stock{LockMode: "auto", ChunkRows: 100}, rules, nil, "node-a", nil)
+		config.Stock{LockMode: "auto", ChunkRows: 100}, rules, nil, "node-a", "node-a", nil)
 	svc.SetSchemas([]string{"srcdb"})
 
 	// Workers 默认 4（>1）：3 表并行扫描共用快照连接集（连接独占约束的核心场景）。

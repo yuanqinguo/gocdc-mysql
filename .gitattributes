@@ -1,0 +1,4 @@
+# 行尾钉死：.verify 套件在 WSL bash 下直跑、配置正文经 $(cat) 进 etcd，
+# CRLF 会直接炸脚本 / 污染配置值（autocrlf=true 的 Windows 检出一律 LF）。
+*.sh text eol=lf
+.verify/** text=auto eol=lf

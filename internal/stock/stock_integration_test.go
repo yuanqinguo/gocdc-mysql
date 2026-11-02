@@ -130,7 +130,7 @@ CREATE TABLE dstdb.t_stock LIKE srcdb.t_stock;`); err != nil {
 		t.Fatal(err)
 	}
 	defer msink.Close(ctx)
-	svc := New(srcDB, schemaMgr, tr, msink, markers, config.Stock{LockMode: "auto", ChunkRows: 100}, rules, nil, "node-a", nil)
+	svc := New(srcDB, schemaMgr, tr, msink, markers, config.Stock{LockMode: "auto", ChunkRows: 100}, rules, nil, "node-a", "node-a", nil)
 
 	svc.SetSchemas([]string{"srcdb"})
 

@@ -152,7 +152,7 @@ func TestIntegrationStockTablesExceedWorkers(t *testing.T) {
 	defer msink.Close(ctx)
 
 	svc := New(srcDB, schemaMgr, tr, msink, markers,
-		config.Stock{LockMode: "auto", ChunkRows: 100, Workers: 2}, rules, nil, "node-a", nil)
+		config.Stock{LockMode: "auto", ChunkRows: 100, Workers: 2}, rules, nil, "node-a", "node-a", nil)
 	svc.SetSchemas([]string{"srcdb"})
 
 	// 碰撞点：轻表在 t_a 长扫期间启动，取模 Conn(2%2)=Conn(0) 撞上在途扫描 → bad connection。
