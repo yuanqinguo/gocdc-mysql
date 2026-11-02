@@ -65,8 +65,8 @@ func doReq(r *ginEngine, method, path string) *httptest.ResponseRecorder {
 	return w
 }
 
-// TestMultiSource_LegacyRoutes400 多源部署旧路由 400 指引（PRD 06 §1.4）。
-func TestMultiSource_LegacyRoutes400(t *testing.T) {
+// TestMultiSource_LegacyRoutesRemoved 旧单源路由已移除：一律 404（无兼容层）。
+func TestMultiSource_LegacyRoutesRemoved(t *testing.T) {
 	deps, _, _ := multiSourceDeps(t)
 	r := NewRouter(deps, AuthConfig{Username: "admin", Password: "pw"})
 
@@ -75,8 +75,8 @@ func TestMultiSource_LegacyRoutes400(t *testing.T) {
 		"/api/v1/rules/effective",
 	} {
 		w := doReq(r, "GET", path)
-		if w.Code != 400 || !strings.Contains(w.Body.String(), "存在多个源") {
-			t.Fatalf("%s 多源应 400 指引: %d %s", path, w.Code, w.Body.String())
+		if w.Code != 404 {
+			t.Fatalf("%s 旧路由应 404: %d %s", path, w.Code, w.Body.String())
 		}
 	}
 	for _, path := range []string{
@@ -89,27 +89,9 @@ func TestMultiSource_LegacyRoutes400(t *testing.T) {
 		"/api/v1/position/migrate-gtid?confirm=true",
 	} {
 		w := doReq(r, "POST", path)
-		if w.Code != 400 || !strings.Contains(w.Body.String(), "存在多个源") {
-			t.Fatalf("%s 多源应 400 指引: %d %s", path, w.Code, w.Body.String())
+		if w.Code != 404 {
+			t.Fatalf("%s 旧路由应 404: %d %s", path, w.Code, w.Body.String())
 		}
-	}
-}
-
-// TestMultiSource_SingleSourceLegacyAlias 单源部署旧路由 = 唯一源等价别名
-//（不出现「存在多个源」400；nil etcd 客户端的 Store 读失败 500 可接受，
-// 与 TestRouter_MigrateGuards 同口径——守卫路径由真实 etcd 集成覆盖）。
-func TestMultiSource_SingleSourceLegacyAlias(t *testing.T) {
-	deps, _ := testDeps() // 单源 default
-	r := NewRouter(deps, AuthConfig{Username: "admin", Password: "pw"})
-	// /rules/effective 不触 etcd：等价别名直接返回数据
-	w := doReq(r, "GET", "/api/v1/rules/effective")
-	if w.Code != 200 || !strings.Contains(w.Body.String(), "db1") {
-		t.Fatalf("单源 /rules/effective 应 200 等价别名: %d %s", w.Code, w.Body.String())
-	}
-	// /position 不出现多源 400（nil store 500 为 etcd 依赖，语义正确）
-	w = doReq(r, "GET", "/api/v1/position")
-	if w.Code == 400 && strings.Contains(w.Body.String(), "存在多个源") {
-		t.Fatalf("单源 /position 不应 400 多源指引: %s", w.Body.String())
 	}
 }
 
@@ -178,10 +160,6 @@ func TestMultiSource_StatusSources(t *testing.T) {
 	if env.Data.Sources[1].ID != "sid-b" || env.Data.Sources[1].Phase != "failed" ||
 		env.Data.Sources[1].PipelineError != "源库不可达" {
 		t.Fatalf("sid-b 摘要错误: %+v", env.Data.Sources[1])
-	}
-	// 多源：顶层管线字段置空（idle），以 sources[] 为准
-	if env.Data.PipelineState != PipeIdle {
-		t.Fatalf("多源顶层镜像应 idle: %q", env.Data.PipelineState)
 	}
 }
 

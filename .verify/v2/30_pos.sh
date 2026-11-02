@@ -16,10 +16,10 @@ done
 for i in $(seq 1 20); do L=$(lagof 9595); [ "$L" = "0" ] && break; sleep 2; done
 
 grp "C1 GET /position 实时反映 etcd"
-P1=$(curl -s --noproxy '*' -u admin:demo123 localhost:8060/api/v1/position)
+P1=$(curl -s --noproxy '*' -u admin:demo123 localhost:8060/api/v1/sources/default/position)
 $SRC -e "INSERT INTO shop.orders (user_id,amount,remark) VALUES (1,1.00,'c1-probe')" 2>/dev/null
 sleep 6
-P2=$(curl -s --noproxy '*' -u admin:demo123 localhost:8060/api/v1/position)
+P2=$(curl -s --noproxy '*' -u admin:demo123 localhost:8060/api/v1/sources/default/position)
 S1=$(echo "$P1" | python3 -c 'import sys,json;d=json.load(sys.stdin)["data"];print(d.get("seq"),d.get("pos"),d.get("gtid_set","")[-40:])')
 S2=$(echo "$P2" | python3 -c 'import sys,json;d=json.load(sys.stdin)["data"];print(d.get("seq"),d.get("pos"),d.get("gtid_set","")[-40:])')
 echo "  前: $S1"; echo "  后: $S2"
@@ -69,7 +69,7 @@ grp "C6 GTID 续传集合一致"
 # 与已 checkpoint 到 etcd 的位点天然差一拍——轮询等落盘追平，不能瞬时快照比对
 C6OK=0
 for i in $(seq 1 15); do
-  PG=$(curl -s --noproxy '*' -u admin:demo123 localhost:8060/api/v1/position | python3 -c 'import sys,json;print(json.load(sys.stdin)["data"]["gtid_set"])')
+  PG=$(curl -s --noproxy '*' -u admin:demo123 localhost:8060/api/v1/sources/default/position | python3 -c 'import sys,json;print(json.load(sys.stdin)["data"]["gtid_set"])')
   MG=$($SRC -N -e "SELECT @@global.gtid_executed" 2>/dev/null)
   [ "$PG" = "$MG" ] && { C6OK=1; echo "  追平 t=${i}s"; break; }
   sleep 1

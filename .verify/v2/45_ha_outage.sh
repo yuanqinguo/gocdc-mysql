@@ -28,8 +28,8 @@ sleep 4
 EVID=$(api_on $FP "/api/v1/ddl-events" | python3 -c 'import sys,json; evs=json.load(sys.stdin)["data"] or []; p=[e["id"] for e in evs if e["status"]=="pending"]; print(p[0] if p else "")' 2>/dev/null)
 [ -z "$EVID" ] && EVID=$(api_on $L "/api/v1/ddl-events" | python3 -c 'import sys,json; evs=json.load(sys.stdin)["data"] or []; p=[e["id"] for e in evs if e["status"]=="pending"]; print(p[0] if p else "")' 2>/dev/null)
 echo "  follower($FP) 看到 pending=$EVID"
-APP=$(api_on $FP "/api/v1/ddl/$EVID/approve?confirm=true" POST | head -c 120)
-[ -z "$APP" ] && { echo "  follower 口审批无响应，回退 leader 口"; APP=$(api_on $L "/api/v1/ddl/$EVID/approve?confirm=true" POST | head -c 120); }
+APP=$(api_on $FP "/api/v1/sources/default/ddl/$EVID/approve?confirm=true" POST | head -c 120)
+[ -z "$APP" ] && { echo "  follower 口审批无响应，回退 leader 口"; APP=$(api_on $L "/api/v1/sources/default/ddl/$EVID/approve?confirm=true" POST | head -c 120); }
 HAS=0
 for i in $(seq 1 15); do
   HAS=$($DST -N -e "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='shop' AND table_name='new_table' AND column_name='e9col'" 2>/dev/null)
@@ -82,7 +82,7 @@ echo "$I5V" | grep -q "^PASS" && ok "I5 切换前后每行恰一条单产出" ||
 
 grp "ADV-07 restock 清标记 + kill leader → 跨会话整表重扫"
 NL=$(leader_port)
-curl -s --noproxy '*' -u admin:demo123 -X POST "localhost:$NL/api/v1/rules/rmqtest.msg/restock?confirm=true" >/dev/null
+curl -s --noproxy '*' -u admin:demo123 -X POST "localhost:$NL/api/v1/sources/default/rules/by-schema/rmqtest/msg/restock?confirm=true" >/dev/null
 LPID=$(pickpid $([ "$NL" = "8060" ] && echo node1 || echo node2))
 kill -9 "$LPID"
 echo "  restock 已清标记 + leader($NL) 已 kill，等接管重扫…"

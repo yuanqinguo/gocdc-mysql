@@ -1,8 +1,6 @@
 package api
 
 import (
-	"strings"
-
 	"github.com/gin-gonic/gin"
 
 	"gocdc/internal/model"
@@ -39,8 +37,6 @@ func (h apiHandlers) sourceEffectiveRules(c *gin.Context) {
 	}
 }
 
-// legacyEffectiveRules 兼容层 GET /rules/effective。
-func (h apiHandlers) legacyEffectiveRules(c *gin.Context, sd *SourceDeps) { effectiveRulesOf(sd, c) }
 
 func summarizeMasks(in map[string]model.MaskSpec) map[string]EffectiveMaskSpec {
 	out := make(map[string]EffectiveMaskSpec, len(in))
@@ -81,19 +77,3 @@ func (h apiHandlers) sourceRestock(c *gin.Context) {
 	}
 }
 
-// legacyRestock 是兼容旧客户端的简写路由；schema 可含点，table 按配置契约
-// 不含点，因此从最后一个点拆分。
-func (h apiHandlers) legacyRestock(c *gin.Context, sd *SourceDeps) {
-	key := c.Param(paramTableKey)
-	separator := strings.LastIndex(key, ".")
-	if separator <= 0 || separator == len(key)-1 {
-		abort(c, 400, "key 须为 schema.table")
-		return
-	}
-	h.restockOf(sd, c, key[:separator], key[separator+1:])
-}
-
-// legacyRestockBySchemaTable 是无歧义的管理端路由，支持库名包含点号。
-func (h apiHandlers) legacyRestockBySchemaTable(c *gin.Context, sd *SourceDeps) {
-	h.restockOf(sd, c, c.Param(paramSchema), c.Param(paramTable))
-}

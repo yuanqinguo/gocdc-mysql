@@ -28,7 +28,7 @@ for t in shop.orders shop.users shop.order_items types.all_types rmqtest.msg clu
 done
 TOTAL=$(IFS=+; echo $(( ${SC[0]}+${SC[1]}+${SC[2]}+${SC[3]}+${SC[4]}+${SC[5]} )))
 [ "$B1OK" = "1" ] && ok "B1 全量 stock 六表行数收敛（合计 $TOTAL 行）" || bad "B1 stock 行数不一致"
-V=$(curl -s --noproxy '*' -u admin:demo123 -X POST 'localhost:8060/api/v1/verify?confirm=true' -H 'Content-Type: application/json' -d '{"database":"types","table":"all_types"}')
+V=$(curl -s --noproxy '*' -u admin:demo123 -X POST 'localhost:8060/api/v1/sources/default/verify?confirm=true' -H 'Content-Type: application/json' -d '{"database":"types","table":"all_types"}')
 echo "  verify all_types: $(echo "$V" | head -c 150)"
 echo "$V" | grep -q '"mismatch":0' && ok "B1b 干净表 verify 0 mismatch" || bad "B1b verify"
 
@@ -58,7 +58,7 @@ done
 echo "  all_types=$T4（期待7=seed5+workload3-delete1）pk变更 new=$B4NEW old=$B4OLD（期待1/0）联合主键 777剩余=$B5A 总数=$B5T（期待1/101）"
 [ "$T4" = "7" ] && [ "$B4NEW" = "1" ] && [ "$B4OLD" = "0" ] && [ "$B5A" = "1" ] && [ "$B5T" = "101" ] \
   && ok "B2-B5 全类型/主键变更/联合主键收敛" || bad "B2-B5 (types=$T4 new=$B4NEW old=$B4OLD items=$B5T)"
-V=$(curl -s --noproxy '*' -u admin:demo123 -X POST 'localhost:8060/api/v1/verify?confirm=true' -H 'Content-Type: application/json' -d '{"database":"types","table":"all_types"}')
+V=$(curl -s --noproxy '*' -u admin:demo123 -X POST 'localhost:8060/api/v1/sources/default/verify?confirm=true' -H 'Content-Type: application/json' -d '{"database":"types","table":"all_types"}')
 echo "$V" | grep -q '"mismatch":0' && ok "B2b 全类型极值/NULL/emoji verify=0" || bad "B2b verify: $(echo "$V"|head -c 200)"
 N4=$($DST -N -e "SELECT c_ubig FROM types.all_types WHERE id=6" 2>/dev/null)
 [ "$N4" = "18446744073709551615" ] && ok "B2c uint64 极值回绕重解释正确（id=6 行）" || bad "B2c c_ubig=$N4"
@@ -77,14 +77,14 @@ echo "  biz2 src=$B4S dst=$B4D 其中增量=$B4I（期待22/2/2——seed20不�
 
 grp "B8 verify 注入差异 → CDC 覆盖复 0"
 $DST -e "UPDATE types.all_types SET c_int=999999 WHERE id=1" 2>/dev/null
-V=$(curl -s --noproxy '*' -u admin:demo123 -X POST 'localhost:8060/api/v1/verify?confirm=true' -H 'Content-Type: application/json' -d '{"database":"types","table":"all_types"}')
+V=$(curl -s --noproxy '*' -u admin:demo123 -X POST 'localhost:8060/api/v1/sources/default/verify?confirm=true' -H 'Content-Type: application/json' -d '{"database":"types","table":"all_types"}')
 echo "  注入后: $(echo "$V" | head -c 260)"
 echo "$V" | grep -q '"mismatch":1' && echo "$V" | grep -q 'c_int' && ok "B8 注入差异逐列检出（明细含 c_int）" || bad "B8 检出"
 $SRC -e "UPDATE types.all_types SET c_int=-2147483648 WHERE id=1" 2>/dev/null
 B8OK=0
 for i in $(seq 1 15); do
   sleep 2
-  V=$(curl -s --noproxy '*' -u admin:demo123 -X POST 'localhost:8060/api/v1/verify?confirm=true' -H 'Content-Type: application/json' -d '{"database":"types","table":"all_types"}')
+  V=$(curl -s --noproxy '*' -u admin:demo123 -X POST 'localhost:8060/api/v1/sources/default/verify?confirm=true' -H 'Content-Type: application/json' -d '{"database":"types","table":"all_types"}')
   echo "$V" | grep -q '"mismatch":0' && { B8OK=1; echo "  CDC 覆盖复 0 t=${i}x2s"; break; }
 done
 [ "$B8OK" = "1" ] && ok "B8b CDC 覆盖后复 0" || bad "B8b: $(echo "$V"|head -c 200)"
@@ -119,7 +119,7 @@ echo "  b10 终值 src=$SA dst=$DA remark=$DR（期待25.50/b10-final）; b7 行
   && ok "B10+B7 终值一致、大事务收敛" || bad "B10/B7 (src=$SA dst=$DA rows=$SO/$DO)"
 
 grp "F5 /rules/effective 合并视图 + H1/H2/H4"
-EFF=$(curl -s --noproxy '*' -u admin:demo123 localhost:8060/api/v1/rules/effective)
+EFF=$(curl -s --noproxy '*' -u admin:demo123 localhost:8060/api/v1/sources/default/rules/effective)
 N=$(echo "$EFF" | python3 -c 'import sys,json;d=json.load(sys.stdin)["data"];rows=d if isinstance(d,list) else d.get("rules",d);print(len(rows))' 2>/dev/null)
 AT=$(echo "$EFF" | python3 -c 'import sys,json;d=json.load(sys.stdin)["data"];rows=d if isinstance(d,list) else d.get("rules",d);print([r for r in rows if "all_types" in str(r.get("table",""))+str(r.get("table_ref",""))][0].get("ddl_policy"))' 2>/dev/null)
 MK=$(echo "$EFF" | python3 -c 'import sys,json;d=json.load(sys.stdin)["data"];rows=d if isinstance(d,list) else d.get("rules",d);print([r for r in rows if str(r.get("table",""))=="users"][0].get("mask_columns"))' 2>/dev/null)

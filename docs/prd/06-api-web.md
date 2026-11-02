@@ -7,8 +7,8 @@
 - **源是一等路由段**：源私有资源的读写全部挂在
   `/api/v1/sources/{sid}/...` 下；cluster 级资源（status 摘要、审计、
   leader）保持原位。
-- **单源部署零破坏**：v1 升级来的部署（唯一源 default）下，全部
-  现行端点行为不变（§1.4 兼容层）。
+- **路由一次性收敛**：源私有端点不保留顶层旧路由别名，单源（default）
+  部署同样走 `/sources/default/...`——单一调用形态，不做弃用窗口。
 - 鉴权（HTTP Basic + 恒时比较）、`confirm=true` 写门禁、审计、错误信封
   全部不变（`internal/api/router.go`、`auth.go`）。
 
@@ -18,7 +18,7 @@
 
 | 方法/路径 | 功能 | 与现行差异 |
 |-----------|------|-----------|
-| `GET /api/v1/status` | 节点/集群信息 + **全部源摘要数组** `sources[]`（每项：id、state、error、since、paused_by_op、event_lag、caught_up、use_gtid、position 摘要） | 顶层 cluster 字段不变；单源部署额外镜像现行顶层管线字段（弃用窗口 ≥ 2 个小版本） |
+| `GET /api/v1/status` | 节点/集群信息 + **全部源摘要数组** `sources[]`（每项：id、state、error、since、paused_by_op、event_lag、caught_up、use_gtid、position 摘要） | 顶层 cluster 字段不变；管线状态一律读 `sources[]`（顶层无镜像字段） |
 | `GET /api/v1/sources` | 源清单：id、源/目标地址（打码）、规则数、表数、sink 集、状态摘要 | 新增（聚合总览页数据源） |
 | `GET /api/v1/sources/{sid}/status` | 单源完整管线状态（= 现行 status 的管线部分 + lag） | 新增 |
 | `GET /api/v1/sources/{sid}/position` | 该源位点 | = 现行 `/position` |
@@ -47,16 +47,14 @@
 - `DDLRecord`、`AuditEntry`、`VerifyRequest/Result` 增加 `source` 字段。
 - 信封、错误码、`respondErrData`（verify 专用）不变。
 
-### 1.4 兼容层（弃用窗口）
+### 1.4 旧顶层路由（已移除）
 
-| 现行端点 | 单源（default）部署 | 多源部署 |
-|----------|----------------------|-----------|
-| `GET /position`、`/rules/effective`、`/ddl-events` | 正常返回 default 源数据（等价别名） | `400` + `"存在多个源，请使用 /sources/{sid}/..."` |
-| `GET /status` 顶层管线字段 | 保留（镜像 default） | 置空 + `sources[]` 为准 |
-| `POST /position`、`/restock`、`/pipeline/*`、`/verify`、`/ddl/:id/*` | 正常作用于 default 源 | `400` 同上 |
-| `POST /leader/resign`、`GET /config`、`/audit` | 不变 | 不变 |
-
-前端只用新路由（即使单源），旧路由纯粹服务外部脚本/监控探针。
+源私有端点的顶层旧路径（`/position`、`/rules/effective`、`/pipeline/*`、
+`/verify`、`/ddl/:id/*`、`/restock` 等）不注册路由，一律 `404`；调用方
+统一迁移到 `/sources/{sid}/...`。依据：项目未上生产、无存量调用方，
+保留双形态只会让「同一操作两种 URL」长期共存，监控与脚本按 sid 显式
+寻址反而更明确。cluster 级端点（`/status`、`/sources`、`/ddl-events`、
+`/audit`、`/config`、`/leader/resign`）保持原位不变。
 
 ### 1.5 实现注意
 
@@ -181,9 +179,8 @@ SET-POSITION 三栏危险表单、etcdctl 直写指引——指引中的 key 模
 - `DDLRecord`、`AuditEntry`、`VerifyResult` 增加 `source: string`。
 - 新增 `SourceSummary`（`GET /sources` 响应：id、源/目标地址、规则数、
   表数、sink 集、状态摘要）。
-- 单源部署下后端镜像的旧顶层管线字段标 `@deprecated`（JSDoc 注明
-  弃用窗口），前端一律读 `sources[]`——**前端代码只走新契约**，旧字段
-  的兼容层（§1.4）纯服务外部脚本。
+- `StatusData` 只保留 cluster 级字段 + `sources[]`，无顶层管线镜像字段——
+  前端与后端单一契约，管线状态一律读 `sources[]`。
 
 **取数层（`shared/api/queries.ts`）**
 

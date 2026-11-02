@@ -97,9 +97,3 @@ func (h apiHandlers) sourceSettleDDL(decision string) gin.HandlerFunc {
 	}
 }
 
-// legacySettleDDL 兼容层 POST /ddl/:event_id/approve|skip。
-func (h apiHandlers) legacySettleDDL(decision string) func(c *gin.Context, sd *SourceDeps) {
-	return func(c *gin.Context, sd *SourceDeps) {
-		h.settleDDLOf(sd, decision)(c)
-	}
-}

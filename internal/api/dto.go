@@ -31,17 +31,6 @@ type StatusData struct {
 
 	// ── 源摘要数组（多源 PRD 06 §1.3：全部源的运行态一览）──
 	Sources []SourceStatus `json:"sources"`
-
-	// ── 顶层管线字段（兼容镜像，弃用窗口 ≥ 2 个小版本）──
-	// 单源部署镜像唯一源（行为与旧版一致）；多源部署置空（idle），以 sources[] 为准。
-	PipelineState   string    `json:"pipeline_state"`                  // Pipeline* 常量之一
-	PipelineError   string    `json:"pipeline_error,omitempty"`        // paused 时的首因错误（人工介入依据）
-	PipelineSince   time.Time `json:"pipeline_since,omitempty"`        // 进入当前状态的时刻
-	PausedByOp      bool      `json:"pipeline_paused_by_op,omitempty"` // paused 源于人工暂停（/pipeline/pause；区别于致命错误）
-	EventLagSeconds *int64    `json:"event_lag_seconds,omitempty"`     // 距最近业务写入秒（稀疏写入会自然老化，仅参考）
-	CaughtUp        *bool     `json:"caught_up,omitempty"`             // GTID/位点追平口径：nil=无采样（stock 期/未 running）
-	MasterLagBytes  *float64  `json:"master_lag_bytes,omitempty"`      // 与源库 SHOW MASTER STATUS 字节差（追赶中时展示）
-	UseGTID         bool      `json:"use_gtid"`                        // source.use_gtid（单源镜像；多源看 sources[].use_gtid）
 }
 
 // SourceStatus /status sources[] 单源摘要（现行顶层管线字段的源内版本 +
@@ -173,13 +162,11 @@ type SetPositionRequest struct {
 // ── 写操作门禁与审计常量 ──
 
 const (
-	queryConfirm  = "confirm"
-	confirmTrue   = "true"
-	paramEventID  = "event_id"
-	paramTableKey = "key"
-	paramSchema   = "schema"
-	paramTable    = "table"
-	paramSourceID = "sid"
+	queryConfirm = "confirm"
+	confirmTrue  = "true"
+	paramEventID = "event_id"
+	paramSchema  = "schema"
+	paramTable   = "table"
 )
 
 // ConfirmSetPosition POST /position 的 body.confirm 专用口令（13 §3）。

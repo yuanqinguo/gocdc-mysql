@@ -43,5 +43,3 @@ func (h apiHandlers) sourceVerify(c *gin.Context) {
 	}
 }
 
-// legacyVerify 兼容层 POST /verify。
-func (h apiHandlers) legacyVerify(c *gin.Context, sd *SourceDeps) { h.verifyOf(sd, c) }

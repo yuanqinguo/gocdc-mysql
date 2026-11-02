@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"time"
 
@@ -77,15 +76,6 @@ type Deps struct {
 // 各文件（status/rules/position/ddl/verify/leader/sources）。
 type apiHandlers struct{ Deps }
 
-// singleSource 唯一源便捷取用（v1 兼容层：单源部署旧路由等价别名）。
-// 多源部署返回 nil——旧路由 400 提示改用 /sources/{sid}/...（PRD 06 §1.4）。
-func (h apiHandlers) singleSource() *SourceDeps {
-	if len(h.Sources) != 1 {
-		return nil
-	}
-	return h.Sources[h.SourceOrder[0]]
-}
-
 // resolveSource 路由 {sid} 参数 → SourceDeps（未知 sid → 404 并写响应）。
 func (h apiHandlers) resolveSource(c *gin.Context) *SourceDeps {
 	sd, ok := h.Sources[c.Param("sid")]
@@ -96,19 +86,8 @@ func (h apiHandlers) resolveSource(c *gin.Context) *SourceDeps {
 	return sd
 }
 
-// requireSingle 旧路由兼容层守卫：单源部署解析唯一源；多源 400 指引新路由。
-func (h apiHandlers) requireSingle(c *gin.Context) *SourceDeps {
-	sd := h.singleSource()
-	if sd == nil {
-		abort(c, 400, "存在多个源，请使用 /api/v1/sources/{sid}/... 按源操作（源清单见 GET /api/v1/sources）")
-		return nil
-	}
-	return sd
-}
-
 // NewRouter 构建 /api/v1 引擎（13 §3 + 多源 PRD 06 §1.2）。embed 静态页由
-// 装配层挂载。旧路由保留为兼容层（单源部署等价别名；多源 400 指引），
-// 前端一律走新路由——旧路由纯服务外部脚本/监控探针（弃用窗口 ≥ 2 个小版本）。
+// 装配层挂载。源是一等路由段：源私有资源全部挂 /sources/{sid}/...。
 func NewRouter(deps Deps, auth AuthConfig) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
@@ -121,8 +100,7 @@ func NewRouter(deps Deps, auth AuthConfig) *gin.Engine {
 	// ── 只读（cluster 级）──
 	api.GET("/status", h.status)
 	api.GET("/sources", h.listSources)
-	// /ddl-events = 全集群 pending 合并（记录带 source 字段）。单源部署下合并
-	// 结果即唯一源数据——旧消费方零变化；多源部署为聚合视图（角标/聚合页用）。
+	// /ddl-events = 全集群 pending 合并（记录带 source 字段，角标/聚合页用）。
 	api.GET("/ddl-events", h.ddlEventsAll)
 	api.GET("/audit", h.auditList)
 	api.GET("/config", h.config)
@@ -147,21 +125,6 @@ func NewRouter(deps Deps, auth AuthConfig) *gin.Engine {
 	// ── 写操作（cluster 级）──
 	api.POST("/leader/resign", h.resign)
 
-	// ── 兼容层（弃用窗口 ≥ 2 个小版本；单源部署 = 唯一源等价别名，
-	//    多源部署 400 指引新路由）──
-	api.GET("/rules/effective", h.legacySingle(h.legacyEffectiveRules))
-	api.GET("/position", h.legacySingle(h.legacyGetPosition))
-	api.POST("/ddl/:event_id/approve", h.legacySingle(h.legacySettleDDL(pipeline.DecisionApprove)))
-	api.POST("/ddl/:event_id/skip", h.legacySingle(h.legacySettleDDL(pipeline.DecisionSkip)))
-	api.POST("/rules/:key/restock", h.legacySingle(h.legacyRestock)) // compatibility route; key is split at the final dot.
-	api.POST("/rules/by-schema/:schema/:table/restock", h.legacySingle(h.legacyRestockBySchemaTable))
-	api.POST("/verify", h.legacySingle(h.legacyVerify))
-	api.POST("/pipeline/pause", h.legacySingle(h.legacyPausePipeline))
-	api.POST("/pipeline/resume", h.legacySingle(h.legacyResumePipeline))
-	api.POST("/position", h.legacySingle(h.legacySetPosition))
-	api.POST("/position/migrate-gtid", h.legacySingle(h.legacyMigrateGTID))
-	api.POST("/position/migrate-filepos", h.legacySingle(h.legacyMigrateFilePos))
-
 	// The static shell is public so it can collect credentials. Unknown API paths
 	// still follow the Basic auth boundary and never fall through to index.html.
 	r.NoRoute(func(c *gin.Context) {
@@ -178,17 +141,6 @@ func NewRouter(deps Deps, auth AuthConfig) *gin.Engine {
 	return r
 }
 
-// legacySingle 兼容层包装：解析唯一源后进入实际 handler；多源 400。
-func (h apiHandlers) legacySingle(next func(c *gin.Context, sd *SourceDeps)) gin.HandlerFunc {
-	return func(c *gin.Context) {
-		sd := h.requireSingle(c)
-		if sd == nil {
-			return
-		}
-		next(c, sd)
-	}
-}
-
 // requireConfirm 写操作 confirm 门禁（13 §3）：缺 confirm=true 时输出 400
 // 并终止。所有写端点第一步调用。
 func requireConfirm(c *gin.Context) bool {
@@ -198,6 +150,3 @@ func requireConfirm(c *gin.Context) bool {
 	abort(c, 400, "写操作需 confirm=true（13 §3）")
 	return false
 }
-
-// errNotAssembly 兼容层/源路由共用的未装配错误。
-func errNotAssembly(what string) error { return errors.New(what + " 未装配") }

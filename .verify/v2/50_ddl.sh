@@ -60,14 +60,14 @@ echo "  挂起事件: $EVID"
 $SRC -e "INSERT INTO biz2.events (kind,payload) VALUES ('incr3','挂起期写入-1'),('incr3','挂起期写入-2')" 2>/dev/null
 sleep 4
 DURING=$($DST -N -e "SELECT COUNT(*) FROM biz2.events WHERE kind='incr3'" 2>/dev/null)
-POS1=$(api /position | python3 -c 'import sys,json; print(json.load(sys.stdin)["data"]["pos"])' 2>/dev/null)
+POS1=$(api /sources/default/position | python3 -c 'import sys,json; print(json.load(sys.stdin)["data"]["pos"])' 2>/dev/null)
 sleep 3
-POS2=$(api /position | python3 -c 'import sys,json; print(json.load(sys.stdin)["data"]["pos"])' 2>/dev/null)
+POS2=$(api /sources/default/position | python3 -c 'import sys,json; print(json.load(sys.stdin)["data"]["pos"])' 2>/dev/null)
 echo "  挂起期: 增量行 during=$DURING（期待0）pos1=$POS1 pos2=$POS2（期待相等）"
 [ "$DURING" = "0" ] && [ -n "$EVID" ] && [ "$POS1" = "$POS2" ] && ok "E3+DDL-11 pause 挂起+位点冻结" || bad "E3/DDL-11 (during=$DURING pos=$POS1/$POS2)"
 
 grp "E5 skip 决策 → 恢复补齐 + 保旧结构 + 审计"
-api "/ddl/$EVID/skip?confirm=true" POST >/dev/null
+api "/sources/default/ddl/$EVID/skip?confirm=true" POST >/dev/null
 E5=0
 for i in $(seq 1 15); do
   AFTER=$($DST -N -e "SELECT COUNT(*) FROM biz2.events WHERE kind='incr3'" 2>/dev/null)
@@ -84,9 +84,9 @@ $SRC -e "ALTER TABLE shop.orders ADD COLUMN email VARCHAR(128) NULL" 2>/dev/null
 sleep 4
 EVID4=$(api /ddl-events | python3 -c 'import sys,json; evs=json.load(sys.stdin)["data"]; p=[e["id"] for e in evs if e["status"]=="pending"]; print(p[0] if p else "")')
 echo "  挂起事件: $EVID4"
-CODE=$(curl -s --noproxy '*' -o /dev/null -w '%{http_code}' -u admin:demo123 -X POST "$API/ddl/$EVID4/approve")
+CODE=$(curl -s --noproxy '*' -o /dev/null -w '%{http_code}' -u admin:demo123 -X POST "$API/sources/default/ddl/$EVID4/approve")
 echo "  无 confirm approve http=$CODE（期待400）"
-api "/ddl/$EVID4/approve?confirm=true" POST >/dev/null
+api "/sources/default/ddl/$EVID4/approve?confirm=true" POST >/dev/null
 E4=0
 for i in $(seq 1 15); do
   HAS4=$($DST -N -e "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='shop' AND table_name='orders' AND column_name='email'" 2>/dev/null)
@@ -135,7 +135,7 @@ sleep 4
 EVID8=$(pending_ids | awk '{print $1}')
 echo "  ALTER 挂起事件: $EVID8"
 $SRC -e "DROP TABLE shop.dying_table" 2>/dev/null   # DDL 冻结在水位后，排在 ALTER 之后
-RES8=$(api "/ddl/$EVID8/approve?confirm=true" POST | head -c 150)
+RES8=$(api "/sources/default/ddl/$EVID8/approve?confirm=true" POST | head -c 150)
 echo "  源表已删后 approve: $RES8"
 sleep 4
 # 恢复后 DROP TABLE（白名单表）会成为新挂起事件，必须 skip 才能让后续流动断言成立
@@ -144,7 +144,7 @@ for i in $(seq 1 10); do
   EVID8B=$(api /ddl-events | EVID8="$EVID8" python3 -c 'import sys,json,os; evs=json.load(sys.stdin)["data"] or []; p=[e["id"] for e in evs if e["status"]=="pending" and e["id"]!=os.environ.get("EVID8")]; print(p[0] if p else "")' 2>/dev/null)
   [ -n "$EVID8B" ] && break; sleep 1
 done
-[ -n "$EVID8B" ] && api "/ddl/$EVID8B/skip?confirm=true" POST >/dev/null
+[ -n "$EVID8B" ] && api "/sources/default/ddl/$EVID8B/skip?confirm=true" POST >/dev/null
 echo "  DROP 事件 $EVID8B 已 skip"
 ALIVE=$( [ -n "$(pickpid node1)" ] && echo 1 || echo 0 )
 $SRC -e "INSERT INTO shop.new_table (val) VALUES ('p08-管线仍活')" 2>/dev/null
@@ -155,6 +155,6 @@ echo "  进程存活=$ALIVE 后续流动=$V8 审计=[$AUD8]"
 [ "$ALIVE" = "1" ] && [ "$V8" = "p08-管线仍活" ] && echo "$AUD8" | grep -qv "无" && ok "E8b+P0-8 过期放行管线不死" || bad "E8b/P0-8 (alive=$ALIVE v=$V8 aud=$AUD8)"
 
 # 收尾：skip 全部 pending（dying_table 的 DROP 事件），避免冻结尾巴
-for EV in $(pending_ids); do api "/ddl/$EV/skip?confirm=true" POST >/dev/null; done
+for EV in $(pending_ids); do api "/sources/default/ddl/$EV/skip?confirm=true" POST >/dev/null; done
 killall_gocdc
 summary

@@ -465,4 +465,4 @@ sources:
 **失败隔离**：某源源库宕机/启动检查不过 → 该源 `failed` + 30s 起指数退避
 重试（上限 5min），其余源不受影响；运行期致命错误仍为该源 `paused` 等
 人工。运维操作（位点回拨/restock/DDL 审批/暂停恢复）按源走
-`/api/v1/sources/{sid}/...`（单源部署旧路由等价可用）。
+`/api/v1/sources/{sid}/...`（单源部署同样走 `/sources/default/...`）。

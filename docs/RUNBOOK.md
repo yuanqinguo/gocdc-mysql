@@ -7,9 +7,9 @@
 > etcdctl 直接写对应 key。
 >
 > **多源部署（配置 v2 `sources[]`）**：源级操作一律走 `/api/v1/sources/{sid}/...`
->（位点回拨/restock/DDL 审批/暂停恢复/verify 全部按源）；旧路由仅单源（v1
-> 包装 default）部署可用（等价别名，弃用窗口 ≥ 2 个小版本），多源部署调用旧
-> 路由返回 400 指引。etcd 直写键全部下沉一层：
+>（位点回拨/restock/DDL 审批/暂停恢复/verify 全部按源）；旧顶层路由已移除
+>（`/position`、`/pipeline/*` 等一律 404），单源部署同样走 `/sources/default/...`。
+> etcd 直写键全部下沉一层：
 > `/gocdc/{cluster}/sources/{sid}/position|stock/*|pipeline-pause|events/ddl/*`。
 > 单源 v1 部署升级后 sid 恒为 `default`。
 

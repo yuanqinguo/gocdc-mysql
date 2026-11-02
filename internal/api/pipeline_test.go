@@ -29,7 +29,7 @@ func TestRouter_PipelinePauseResume(t *testing.T) {
 	r, pauses, resumes := pipelineTestRouter(t)
 
 	// 缺 confirm → 400，闭包不被调用
-	req := httptest.NewRequest("POST", "/api/v1/pipeline/pause", nil)
+	req := httptest.NewRequest("POST", "/api/v1/sources/default/pipeline/pause", nil)
 	req.SetBasicAuth("admin", "pw")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -41,7 +41,7 @@ func TestRouter_PipelinePauseResume(t *testing.T) {
 	}
 
 	// confirm=true → 200，pause 恰好一次
-	req = httptest.NewRequest("POST", "/api/v1/pipeline/pause?confirm=true", nil)
+	req = httptest.NewRequest("POST", "/api/v1/sources/default/pipeline/pause?confirm=true", nil)
 	req.SetBasicAuth("admin", "pw")
 	w = httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -53,7 +53,7 @@ func TestRouter_PipelinePauseResume(t *testing.T) {
 	}
 
 	// resume 同构
-	req = httptest.NewRequest("POST", "/api/v1/pipeline/resume?confirm=true", nil)
+	req = httptest.NewRequest("POST", "/api/v1/sources/default/pipeline/resume?confirm=true", nil)
 	req.SetBasicAuth("admin", "pw")
 	w = httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -68,7 +68,7 @@ func TestRouter_PipelinePauseResume(t *testing.T) {
 func TestRouter_PipelineNotWired(t *testing.T) {
 	r, _ := testRouter(t) // Deps 未装配 Pause/Resume
 
-	for _, path := range []string{"/api/v1/pipeline/pause", "/api/v1/pipeline/resume"} {
+	for _, path := range []string{"/api/v1/sources/default/pipeline/pause", "/api/v1/sources/default/pipeline/resume"} {
 		req := httptest.NewRequest("POST", path+"?confirm=true", nil)
 		req.SetBasicAuth("admin", "pw")
 		w := httptest.NewRecorder()
@@ -84,7 +84,7 @@ func TestRouter_PipelinePauseError(t *testing.T) {
 	defaultSD(deps).PausePipeline = func(context.Context) error { return errors.New("本节点当前不承担管线") }
 	r := NewRouter(deps, AuthConfig{Username: "admin", Password: "pw"})
 
-	req := httptest.NewRequest("POST", "/api/v1/pipeline/pause?confirm=true", nil)
+	req := httptest.NewRequest("POST", "/api/v1/sources/default/pipeline/pause?confirm=true", nil)
 	req.SetBasicAuth("admin", "pw")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)

@@ -32,8 +32,6 @@ func (h apiHandlers) sourceGetPosition(c *gin.Context) {
 	}
 }
 
-// legacyGetPosition 兼容层 GET /position（单源部署 = 唯一源等价别名）。
-func (h apiHandlers) legacyGetPosition(c *gin.Context, sd *SourceDeps) { getPositionOf(sd, c) }
 
 // mergeSetPosition SET-POSITION 融合决策（纯函数可单测）：请求只携带 name/pos，
 // 其余字段以 etcd 现值为底沿用——Store.Save 是整值覆盖，若只写请求三件套，
@@ -84,8 +82,6 @@ func (h apiHandlers) sourceSetPosition(c *gin.Context) {
 	}
 }
 
-// legacySetPosition 兼容层 POST /position。
-func (h apiHandlers) legacySetPosition(c *gin.Context, sd *SourceDeps) { h.setPositionOf(sd, c) }
 
 // gtidMigrateMaxGap migrate-gtid 的追平门槛：位点距 master 尾部最大容忍字节差。
 // 窗口内未确认事务将被跳过（响应明示 gap_bytes）；超出则拒绝并指引先追平。
@@ -218,8 +214,6 @@ func (h apiHandlers) sourceMigrateGTID(c *gin.Context) {
 	}
 }
 
-// legacyMigrateGTID 兼容层 POST /position/migrate-gtid。
-func (h apiHandlers) legacyMigrateGTID(c *gin.Context, sd *SourceDeps) { h.migrateGTIDOf(sd, c) }
 
 // migrateFilePosOf POST migrate-filepos（源作用域）：GTID → file:pos（反向）。
 func (h apiHandlers) migrateFilePosOf(sd *SourceDeps, c *gin.Context) {
@@ -277,5 +271,3 @@ func (h apiHandlers) sourceMigrateFilePos(c *gin.Context) {
 	}
 }
 
-// legacyMigrateFilePos 兼容层 POST /position/migrate-filepos。
-func (h apiHandlers) legacyMigrateFilePos(c *gin.Context, sd *SourceDeps) { h.migrateFilePosOf(sd, c) }

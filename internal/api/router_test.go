@@ -190,10 +190,10 @@ func TestRouter_Auth(t *testing.T) {
 	}
 }
 
-// TestRouter_StatusPipelineFields /status 管线状态契约：未装配 = idle；
-// 装配后透传 state/error/event_lag_seconds。
+// TestRouter_StatusPipelineFields /status 源摘要契约（管线状态以 sources[]
+// 为准）：未装配 Pipeline 闭包 = idle；装配后透传 state/error/event_lag_seconds。
 func TestRouter_StatusPipelineFields(t *testing.T) {
-	fetch := func(deps Deps) map[string]any {
+	fetchSource := func(deps Deps) map[string]any {
 		t.Helper()
 		r := NewRouter(deps, AuthConfig{Username: "admin", Password: "pw"})
 		req := httptest.NewRequest("GET", "/api/v1/status", nil)
@@ -204,20 +204,25 @@ func TestRouter_StatusPipelineFields(t *testing.T) {
 			t.Fatalf("status 应 200: %d %s", w.Code, w.Body.String())
 		}
 		var envelope struct {
-			Code int            `json:"code"`
-			Data map[string]any `json:"data"`
+			Code int `json:"code"`
+			Data struct {
+				Sources []map[string]any `json:"sources"`
+			} `json:"data"`
 		}
 		if err := json.Unmarshal(w.Body.Bytes(), &envelope); err != nil {
 			t.Fatalf("解析 status 响应: %v", err)
 		}
-		return envelope.Data
+		if len(envelope.Data.Sources) != 1 {
+			t.Fatalf("单源应 1 项摘要: %+v", envelope.Data.Sources)
+		}
+		return envelope.Data.Sources[0]
 	}
 
 	// 未装配 Pipeline → idle（未参与同步的诚实口径）
 	deps, _ := testDeps()
-	data := fetch(deps)
-	if data["pipeline_state"] != PipeIdle {
-		t.Fatalf("未装配应 idle: %v", data["pipeline_state"])
+	src := fetchSource(deps)
+	if src["pipeline_state"] != PipeIdle {
+		t.Fatalf("未装配应 idle: %v", src["pipeline_state"])
 	}
 
 	// 装配 paused → 透传错误与事件延迟
@@ -225,12 +230,12 @@ func TestRouter_StatusPipelineFields(t *testing.T) {
 	defaultSD(deps2).Pipeline = func() PipelineSnapshot {
 		return PipelineSnapshot{State: PipePaused, Error: "位点熔断", Since: time.Now(), EventLag: 42, HasLag: true}
 	}
-	data = fetch(deps2)
-	if data["pipeline_state"] != PipePaused || data["pipeline_error"] != "位点熔断" {
-		t.Fatalf("paused 字段透传: %v/%v", data["pipeline_state"], data["pipeline_error"])
+	src = fetchSource(deps2)
+	if src["pipeline_state"] != PipePaused || src["pipeline_error"] != "位点熔断" {
+		t.Fatalf("paused 字段透传: %v/%v", src["pipeline_state"], src["pipeline_error"])
 	}
-	if lag, ok := data["event_lag_seconds"].(float64); !ok || lag != 42 {
-		t.Fatalf("event_lag_seconds 应为 42: %v", data["event_lag_seconds"])
+	if lag, ok := src["event_lag_seconds"].(float64); !ok || lag != 42 {
+		t.Fatalf("event_lag_seconds 应为 42: %v", src["event_lag_seconds"])
 	}
 
 	// 人工暂停快照 → paused_by_op=true（前端切换「恢复管线」入口的依据）
@@ -238,9 +243,9 @@ func TestRouter_StatusPipelineFields(t *testing.T) {
 	defaultSD(deps3).Pipeline = func() PipelineSnapshot {
 		return PipelineSnapshot{State: PipePaused, Error: "管线已被人工暂停", Since: time.Now(), PausedByOp: true}
 	}
-	data = fetch(deps3)
-	if data["pipeline_paused_by_op"] != true {
-		t.Fatalf("人工暂停应透传 paused_by_op=true: %v", data["pipeline_paused_by_op"])
+	src = fetchSource(deps3)
+	if src["pipeline_paused_by_op"] != true {
+		t.Fatalf("人工暂停应透传 paused_by_op=true: %v", src["pipeline_paused_by_op"])
 	}
 
 	// 非人工暂停（致命错误/停机）→ 字段省略（omitempty，前端不出现恢复入口）
@@ -248,9 +253,9 @@ func TestRouter_StatusPipelineFields(t *testing.T) {
 	defaultSD(deps4).Pipeline = func() PipelineSnapshot {
 		return PipelineSnapshot{State: PipePaused, Error: "sink 不可重试", Since: time.Now()}
 	}
-	data = fetch(deps4)
-	if _, exists := data["pipeline_paused_by_op"]; exists {
-		t.Fatalf("非人工暂停不应出现 paused_by_op: %v", data["pipeline_paused_by_op"])
+	src = fetchSource(deps4)
+	if _, exists := src["pipeline_paused_by_op"]; exists {
+		t.Fatalf("非人工暂停不应出现 paused_by_op: %v", src["pipeline_paused_by_op"])
 	}
 }
 
@@ -262,7 +267,7 @@ func TestRouter_WriteConfirm(t *testing.T) {
 	})
 
 	// 无 confirm → 400
-	req := httptest.NewRequest("POST", "/api/v1/ddl/db1.t1.f.100/skip", nil)
+	req := httptest.NewRequest("POST", "/api/v1/sources/default/ddl/db1.t1.f.100/skip", nil)
 	req.SetBasicAuth("admin", "pw")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -270,7 +275,7 @@ func TestRouter_WriteConfirm(t *testing.T) {
 		t.Fatalf("缺 confirm 应 400: %d", w.Code)
 	}
 	// confirm=true → skip 生效
-	req = httptest.NewRequest("POST", "/api/v1/ddl/db1.t1.f.100/skip?confirm=true", nil)
+	req = httptest.NewRequest("POST", "/api/v1/sources/default/ddl/db1.t1.f.100/skip?confirm=true", nil)
 	req.SetBasicAuth("admin", "pw")
 	w = httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -287,7 +292,7 @@ func TestRouter_EffectiveRules(t *testing.T) {
 	deps, _ := testDeps()
 	_ = defaultSD(deps).Rules().Match("db1", "t1") // 预热编译视图缓存
 	r := NewRouter(deps, AuthConfig{Username: "admin", Password: "pw"})
-	req := httptest.NewRequest("GET", "/api/v1/rules/effective", nil)
+	req := httptest.NewRequest("GET", "/api/v1/sources/default/rules/effective", nil)
 	req.SetBasicAuth("admin", "pw")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -325,7 +330,7 @@ func TestRouter_EffectiveRulesRedactMaskSecrets(t *testing.T) {
 	deps, _ := testDeps()
 	defaultSD(deps).Rules = func() *pipeline.CompiledRules { return compiled }
 	r := NewRouter(deps, AuthConfig{Username: "admin", Password: "pw"})
-	req := httptest.NewRequest("GET", "/api/v1/rules/effective", nil)
+	req := httptest.NewRequest("GET", "/api/v1/sources/default/rules/effective", nil)
 	req.SetBasicAuth("admin", "pw")
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
@@ -371,8 +376,7 @@ func TestRouter_RestockSupportsDottedSchemas(t *testing.T) {
 	r := NewRouter(deps, AuthConfig{Username: "admin", Password: "pw"})
 
 	for _, path := range []string{
-		"/api/v1/rules/by-schema/edu.mall.admin/users/restock?confirm=true",
-		"/api/v1/rules/edu.mall.admin.users/restock?confirm=true",
+		"/api/v1/sources/default/rules/by-schema/edu.mall.admin/users/restock?confirm=true",
 	} {
 		req := httptest.NewRequest("POST", path, nil)
 		req.SetBasicAuth("admin", "pw")
@@ -388,7 +392,7 @@ func TestRouter_PositionSet(t *testing.T) {
 	t.Skip("position 写依赖真实 etcd Store（集成覆盖：TestIntegrationStoreGate/Elector_Takeover）")
 	r, _ := testRouter(t)
 	body := `{"name":"bin.1","pos":100,"confirm":"SET-POSITION"}`
-	req := httptest.NewRequest("POST", "/api/v1/position", stringsReader(body))
+	req := httptest.NewRequest("POST", "/api/v1/sources/default/position", stringsReader(body))
 	req.SetBasicAuth("admin", "pw")
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -397,7 +401,7 @@ func TestRouter_PositionSet(t *testing.T) {
 		t.Fatalf("position 应 200: %d %s", w.Code, w.Body.String())
 	}
 	// 错误 confirm → 400
-	req = httptest.NewRequest("POST", "/api/v1/position", stringsReader(`{"confirm":"no"}`))
+	req = httptest.NewRequest("POST", "/api/v1/sources/default/position", stringsReader(`{"confirm":"no"}`))
 	req.SetBasicAuth("admin", "pw")
 	req.Header.Set("Content-Type", "application/json")
 	w = httptest.NewRecorder()
@@ -431,7 +435,7 @@ func TestRouter_Verify(t *testing.T) {
 	body := `{"database":"db1","table":"t1","pk":"id","sample":50}`
 
 	// 无 confirm → 400
-	req := httptest.NewRequest("POST", "/api/v1/verify", stringsReader(body))
+	req := httptest.NewRequest("POST", "/api/v1/sources/default/verify", stringsReader(body))
 	req.SetBasicAuth("admin", "pw")
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -441,7 +445,7 @@ func TestRouter_Verify(t *testing.T) {
 	}
 
 	// confirm=true → 200 + 结果数据（Mismatch=1 仍是 200）
-	req = httptest.NewRequest("POST", "/api/v1/verify?confirm=true", stringsReader(body))
+	req = httptest.NewRequest("POST", "/api/v1/sources/default/verify?confirm=true", stringsReader(body))
 	req.SetBasicAuth("admin", "pw")
 	req.Header.Set("Content-Type", "application/json")
 	w = httptest.NewRecorder()
@@ -456,7 +460,7 @@ func TestRouter_Verify(t *testing.T) {
 	}
 
 	// 缺 database/table → 400
-	req = httptest.NewRequest("POST", "/api/v1/verify?confirm=true", stringsReader(`{"table":"t1"}`))
+	req = httptest.NewRequest("POST", "/api/v1/sources/default/verify?confirm=true", stringsReader(`{"table":"t1"}`))
 	req.SetBasicAuth("admin", "pw")
 	req.Header.Set("Content-Type", "application/json")
 	w = httptest.NewRecorder()

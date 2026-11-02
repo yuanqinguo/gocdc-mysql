@@ -47,7 +47,7 @@ echo "  保留字 DDL 挂起: $EVID"
 A3=0
 V3D=""
 if [ -n "$EVID" ]; then
-  api "/ddl/$EVID/approve?confirm=true" POST >/dev/null
+  api "/sources/default/ddl/$EVID/approve?confirm=true" POST >/dev/null
   for i in $(seq 1 15); do
     T=$($DST -N -e "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='shop' AND table_name='order' AND column_name='desc'" 2>/dev/null)
     [ "$T" = "1" ] && { A3=1; echo "  目标自动加列 t=${i}x2s"; break; }; sleep 2
@@ -100,22 +100,22 @@ grp "ADV-08 同一 DDL 重复 skip 幂等（Settled 短路）"
 $SRC -e "ALTER TABLE shop.new_table ADD COLUMN adv8zz INT NULL" 2>/dev/null
 sleep 4
 EVID8=$(pending_id)
-R1=$(api "/ddl/$EVID8/skip?confirm=true" POST | head -c 60)
+R1=$(api "/sources/default/ddl/$EVID8/skip?confirm=true" POST | head -c 60)
 sleep 1
-R2=$(api "/ddl/$EVID8/skip?confirm=true" POST | head -c 60)
+R2=$(api "/sources/default/ddl/$EVID8/skip?confirm=true" POST | head -c 60)
 echo "  两次 skip: [$R1] [$R2]"
 echo "$R1" | grep -q '"code":0' && echo "$R2" | grep -q '"code":0' && ok "ADV-08 二次 skip 仍 200" || bad "ADV-08 ($R1/$R2)"
 $SRC -e "ALTER TABLE shop.new_table DROP COLUMN adv8zz" 2>/dev/null
 sleep 3
 EVID8B=$(pending_id)
-[ -n "$EVID8B" ] && api "/ddl/$EVID8B/skip?confirm=true" POST >/dev/null
+[ -n "$EVID8B" ] && api "/sources/default/ddl/$EVID8B/skip?confirm=true" POST >/dev/null
 
 grp "ADV-09 TRUNCATE → pause 审批"
 $SRC -e "TRUNCATE TABLE shop.new_table" 2>/dev/null
 sleep 4
 EVID9=$(pending_id)
 [ -z "$EVID9" ] && { bad "ADV-09 未挂起"; }
-api "/ddl/$EVID9/skip?confirm=true" POST >/dev/null
+api "/sources/default/ddl/$EVID9/skip?confirm=true" POST >/dev/null
 sleep 5
 $SRC -e "INSERT INTO shop.new_table (val) VALUES ('adv09-after')" 2>/dev/null
 sleep 5
@@ -178,7 +178,7 @@ ccput verify /tmp/v2/body-auth.yml
 stub_start node1 verify :9595 :8060
 wait_ready 9595 60 || bad "ADV-10 启动"
 sleep 3
-NOAUTH=$(curl -s --noproxy '*' -o /dev/null -w '%{http_code}' "$API/position")
+NOAUTH=$(curl -s --noproxy '*' -o /dev/null -w '%{http_code}' "$API/sources/default/position")
 GATE=$(curl -s --noproxy '*' -o /dev/null -w '%{http_code}' -X POST "$API/leader/resign")
 echo "  无凭据GET=$NOAUTH（期待200）无confirm写=$GATE（期待400=门禁独立）"
 [ "$NOAUTH" = "200" ] && [ "$GATE" = "400" ] && ok "ADV-10 裸奔放行+confirm 门禁独立" || bad "ADV-10 ($NOAUTH/$GATE)"
@@ -190,8 +190,8 @@ ccput verify "$V2/body_main.yml"
 stub_start node1 verify :9595 :8060
 wait_ready 9595 60 || bad "ADV-10 复原启动"
 sleep 3
-R1=$(curl -s --noproxy '*' -o /dev/null -w '%{http_code}' "$API/position")
-R2=$(curl -s --noproxy '*' -u admin:demo123 -o /dev/null -w '%{http_code}' "$API/position")
+R1=$(curl -s --noproxy '*' -o /dev/null -w '%{http_code}' "$API/sources/default/position")
+R2=$(curl -s --noproxy '*' -u admin:demo123 -o /dev/null -w '%{http_code}' "$API/sources/default/position")
 [ "$R1" = "401" ] && [ "$R2" = "200" ] && ok "ADV-10b 复原 401/200" || bad "ADV-10b ($R1/$R2)"
 
 grp "ADV-13 位点回拨时间机器（重放窗口含已决策 DDL/结构变更前旧行像）"
@@ -200,7 +200,7 @@ grp "ADV-13 位点回拨时间机器（重放窗口含已决策 DDL/结构变更
 # + 加列前的旧行像（列数少于目标当前结构 → on_convert_error 降级路径）。
 $SRC -e "ALTER TABLE shop.adv13t ADD COLUMN v13 INT NULL" 2>/dev/null
 sleep 4
-E13=$(pending_id); api "/ddl/$E13/approve?confirm=true" POST >/dev/null
+E13=$(pending_id); api "/sources/default/ddl/$E13/approve?confirm=true" POST >/dev/null
 sleep 5
 $SRC -e "INSERT INTO shop.adv13t (v) VALUES (1),(2),(3)" 2>/dev/null
 sleep 5
@@ -234,6 +234,6 @@ RESN=$(grep -ac '全量表完成.*rmqtest' /tmp/v2/node1.log 2>/dev/null)
 echo "  restock 后 20s: dst=$PRE→$POSTN 全量日志=$RESN（期待不变/0）"
 [ "$PRE" = "$POSTN" ] && [ "${RESN:-0}" = "0" ] && ok "ADV-14 运行中不自发重扫" || bad "ADV-14 ($PRE→$POSTN log=$RESN)"
 
-for EV in $(pending_id); do api "/ddl/$EV/skip?confirm=true" POST >/dev/null; done
+for EV in $(pending_id); do api "/sources/default/ddl/$EV/skip?confirm=true" POST >/dev/null; done
 killall_gocdc
 summary

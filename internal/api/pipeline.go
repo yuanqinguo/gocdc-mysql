@@ -1,6 +1,8 @@
 package api
 
 import (
+	"errors"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -15,7 +17,7 @@ func (h apiHandlers) pausePipelineOf(sd *SourceDeps, c *gin.Context) {
 	if sd.PausePipeline != nil {
 		err = sd.PausePipeline(c.Request.Context())
 	} else {
-		err = errNotAssembly("暂停管线")
+		err = errors.New("暂停管线未装配")
 	}
 	auditSource(auditOrNil(h.Audit), c, sd.ID, auditPipelinePause, "", err)
 	respondResult(c, err)
@@ -28,8 +30,6 @@ func (h apiHandlers) sourcePausePipeline(c *gin.Context) {
 	}
 }
 
-// legacyPausePipeline 兼容层 POST /pipeline/pause。
-func (h apiHandlers) legacyPausePipeline(c *gin.Context, sd *SourceDeps) { h.pausePipelineOf(sd, c) }
 
 // resumePipelineOf 源作用域恢复人工暂停——删该源持久标志并从该源 etcd 位点
 // 重启全量/增量流程。
@@ -41,7 +41,7 @@ func (h apiHandlers) resumePipelineOf(sd *SourceDeps, c *gin.Context) {
 	if sd.ResumePipeline != nil {
 		err = sd.ResumePipeline(c.Request.Context())
 	} else {
-		err = errNotAssembly("恢复管线")
+		err = errors.New("恢复管线未装配")
 	}
 	auditSource(auditOrNil(h.Audit), c, sd.ID, auditPipelineResume, "", err)
 	respondResult(c, err)
@@ -54,5 +54,3 @@ func (h apiHandlers) sourceResumePipeline(c *gin.Context) {
 	}
 }
 
-// legacyResumePipeline 兼容层 POST /pipeline/resume。
-func (h apiHandlers) legacyResumePipeline(c *gin.Context, sd *SourceDeps) { h.resumePipelineOf(sd, c) }

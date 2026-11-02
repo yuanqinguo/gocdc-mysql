@@ -240,6 +240,16 @@ wait_src_state(){
   done
   return 1
 }
+# wait_src_phase <web_port> <sid> <want> [timeout_s]：等某源装配 phase 到位
+# （starting/ready/failed；TCP 半开连接 hang 到超时可达 20s+，禁止裸 sleep 定值）
+wait_src_phase(){
+  local port=$1 sid=$2 want=$3 i=0
+  while [ $i -lt "${4:-60}" ]; do
+    [ "$(src_phase "$port" "$sid")" = "$want" ] && return 0
+    i=$((i+1)); sleep 1
+  done
+  return 1
+}
 # wait_row <dst_cmd> <sql> <want> [timeout_s]：轮询目标库标量值到位（PLAYBOOK §5
 # 套路——MySQL 落地断言禁止裸 sleep 后一次判）
 wait_row(){

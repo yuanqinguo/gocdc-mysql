@@ -80,7 +80,7 @@ func TestAuditTypedNilSafety(t *testing.T) {
 		t.Fatal("非 nil *apiError 不得归一为 nil")
 	}
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	c.Request = httptest.NewRequest("POST", "/api/v1/position/migrate-gtid?confirm=true", nil)
+	c.Request = httptest.NewRequest("POST", "/api/v1/sources/default/position/migrate-gtid?confirm=true", nil)
 	var verr *apiError // 模拟 planGTIDMigration 成功路径的 typed-nil 返回
 	func() {
 		defer func() {
@@ -106,13 +106,13 @@ func TestRouter_MigrateGuards(t *testing.T) {
 		r.ServeHTTP(w, req)
 		return w.Body.String()
 	}
-	if body := post("/api/v1/position/migrate-gtid"); !strings.Contains(body, "confirm=true") {
+	if body := post("/api/v1/sources/default/position/migrate-gtid"); !strings.Contains(body, "confirm=true") {
 		t.Fatalf("缺 confirm 应 400: %s", body)
 	}
 	// use_gtid=false（默认基线）→ gtid 迁移拒绝、filepos 迁移进入位点读取
 	//（testDeps 的 Store 为 nil 客户端包装，Load 会失败 → 500 而非 400，可接受：
 	// 守卫路径已由纯函数单测覆盖）
-	if body := post("/api/v1/position/migrate-gtid?confirm=true"); !strings.Contains(body, "use_gtid 未开启") {
+	if body := post("/api/v1/sources/default/position/migrate-gtid?confirm=true"); !strings.Contains(body, "use_gtid 未开启") {
 		t.Fatalf("use_gtid 未开应拒绝: %s", body)
 	}
 }

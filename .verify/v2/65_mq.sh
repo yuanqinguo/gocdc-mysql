@@ -33,7 +33,7 @@ C5=$($DST -N -e "SELECT COUNT(*) FROM rmqtest.msg" 2>/dev/null)
 echo "  先增量落目标: dst=$C5（期待100）"
 TS=$(date +%s)
 echo "  restock 前标记: $($ETCDC get /gocdc/verify/sources/default/stock/rmqtest.msg --print-value-only 2>/dev/null | head -c 40)"
-curl -sS --noproxy '*' --max-time 10 -u admin:demo123 -X POST -o /tmp/v2/rs.json -w '%{http_code}' "$API/rules/rmqtest.msg/restock?confirm=true" > /tmp/v2/rs.code 2>/tmp/v2/rs.err
+curl -sS --noproxy '*' --max-time 10 -u admin:demo123 -X POST -o /tmp/v2/rs.json -w '%{http_code}' "$API/sources/default/rules/by-schema/rmqtest/msg/restock?confirm=true" > /tmp/v2/rs.code 2>/tmp/v2/rs.err
 echo "  restock: code=$(cat /tmp/v2/rs.code 2>/dev/null) err=[$(cat /tmp/v2/rs.err 2>/dev/null)] body=[$(cat /tmp/v2/rs.json 2>/dev/null)] pid=$(pickpid node1)"
 kill -TERM $(pickpid node1) 2>/dev/null
 for i in $(seq 1 30); do [ -z "$(pickpid node1)" ] && break; sleep 1; done
@@ -114,11 +114,11 @@ echo "$I6V" | grep -q "^PASS" && ok "I6 同行事件严格递增保序" || bad "
 
 grp "I3 broker 宕机双写单边 + 位点冻结 + 恢复自动补投"
 docker stop rmqbroker >/dev/null
-POSB=$(api /position | python3 -c 'import sys,json; print(json.load(sys.stdin)["data"]["pos"])' 2>/dev/null)
+POSB=$(api /sources/default/position | python3 -c 'import sys,json; print(json.load(sys.stdin)["data"]["pos"])' 2>/dev/null)
 $SRC -e "INSERT INTO rmqtest.msg (name,qty,amount,note) VALUES ('i3-a',1,1,'宕机期'),('i3-b',2,2,'宕机期'),('i3-c',3,3,'宕机期'),('i3-d',4,4,'宕机期'),('i3-e',5,5,'宕机期')" 2>/dev/null
 sleep 6
 DSTC=$($DST -N -e "SELECT COUNT(*) FROM rmqtest.msg WHERE note='宕机期'" 2>/dev/null)
-POSA=$(api /position | python3 -c 'import sys,json; print(json.load(sys.stdin)["data"]["pos"])' 2>/dev/null)
+POSA=$(api /sources/default/position | python3 -c 'import sys,json; print(json.load(sys.stdin)["data"]["pos"])' 2>/dev/null)
 echo "  宕机期: MySQL侧照写=$DSTC/5 位点 pos_before=$POSB pos_after=$POSA（期待相等=冻结）"
 docker start rmqbroker >/dev/null
 echo "  broker 启动，等 topic 路由注册…"

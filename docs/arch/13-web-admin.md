@@ -105,11 +105,13 @@ etcd 治理（P2，leader 侧 `gcLoop` 每小时）：① stock 死标记（白�
 - **源是一等路由段**：源私有资源挂 `/api/v1/sources/{sid}/...`（status/
   position/rules/ddl/pipeline/verify/migrate）；cluster 级（status 摘要、
   /sources 清单、/ddl-events 全集群合并、audit、config、leader）保持原位。
-- **兼容层（弃用窗口 ≥ 2 个小版本）**：单源（default）部署旧路由等价别名、
-  顶层管线字段镜像唯一源；多源部署旧路由 400 指引新路由、顶层管线字段置空
-  以 `sources[]` 为准。前端一律走新路由——旧路由纯服务外部脚本/监控探针。
-- **DTO**：StatusData 增加 `sources: SourceStatus[]`（装配 phase + 管线状态 +
-  lag + 位点摘要）；DDLRecord/AuditEntry 增加 `source` 字段（源级操作可追溯）。
+- **路由一次性收敛（无兼容层）**：源私有端点不保留顶层旧路由别名，单源
+  （default）部署同样走 `/sources/default/...`，旧路径一律 404；/status
+  顶层不镜像管线字段，`sources[]` 是唯一口径。依据：无存量调用方，单一
+  调用形态比双形态过渡更可维护。
+- **DTO**：StatusData 只含 cluster 级字段 + `sources: SourceStatus[]`
+  （装配 phase + 管线状态 + lag + 位点摘要）；DDLRecord/AuditEntry 增加
+  `source` 字段（源级操作可追溯）。
 - **前端**：源作用域是路由级状态（URL query `?source={sid}`，刷新/书签/分享
   保持作用域）；顶栏源选择器（单源部署隐藏）；总控台聚合视图（汇总条 + 源
   卡片栅格 + 各页按源切分）；react-query key 全部含 sid（缓存隔离）。

@@ -49,7 +49,7 @@ for i in $(seq 1 15); do
 done
 echo "  增量: INSERT=$MI UPDATE=$MU（期待1/1）"
 [ "$MI" = "1" ] && [ "$MU" = "1" ] && ok "③b 带点库名增量落 merge" || bad "③b ($MI/$MU)"
-VR=$(curl -s --noproxy '*' -u admin:demo123 -X POST "$API/verify?confirm=true" -H 'Content-Type: application/json' -d '{"database":"edu.mall.admin","table":"users"}')
+VR=$(curl -s --noproxy '*' -u admin:demo123 -X POST "$API/sources/default/verify?confirm=true" -H 'Content-Type: application/json' -d '{"database":"edu.mall.admin","table":"users"}')
 echo "  verify: $(echo "$VR" | head -c 150)"
 echo "$VR" | grep -q '"mismatch":0' && ok "③c verify 走 target_database 对账 0 mismatch" || bad "③c"
 $SRC -e "ALTER TABLE \`edu.mall.admin\`.users ADD COLUMN email VARCHAR(64) NULL" 2>/dev/null

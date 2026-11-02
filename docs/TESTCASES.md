@@ -175,7 +175,7 @@ L3 脚本 `.verify/v2/35_ms_core.sh`（数据面）+ `46_ms_ha.sh`（故障面�
 | MS-11 | 配置校验 V1~V6：源数上限/id 规则/v1-v2 双写/跨源目标冲突/server_id 冲突/继承合并 | 全分支拒启或通过；v1 自动包装 default | L1+L3 | config 表驱动（multi_source_test.go）+ 35 组脚本分支 | ✅ |
 | MS-12 | v1 配置零修改升级 + etcd 键迁移幂等 + 位点连续 | 自动包装 default；旧键 CAS 搬到 sources/default/；完成标记；二次启动不重搬；增量续传（E12） | L2 | 46 组 | ✅-L3 |
 | MS-13 | 旧 leader 位点写拒绝（协调面失联 → gate 消失 → 熔断） | 双源管线停（安全态）；恢复重启后零丢失续传（E13） | L3 | 46 组 | ✅-L3 |
-| MS-14 | API 兼容层：单源旧路由等价别名 / 多源 400 指引 / /sources 清单 / 审计 source 字段 / 未知 sid 404 / restock 409（standby） | PRD 06 §1.4 全表 | L1+L3 | api multi_source_test.go + 35 组 | ✅ |
+| MS-14 | 源级路由：旧顶层路由已移除（一律 404）/ /sources 清单 / 审计 source 字段 / 未知 sid 404 / restock 409（standby） | 旧路径 404（PRD 06 §1.4）；源级操作走 /sources/{sid}/... | L1+L3 | api multi_source_test.go + 35 组 | ✅ |
 | MS-15 | server_id 按 node_id:sid 派生互异；schema 缓存/transformer 按源实例隔离 | 双 dump 连接并存不互踢；双源持续同步 | L1+L3 | identity 单测 + 35 组 | ✅ |
 | MS-16 | 指标 label：源私有指标带 source、cluster 级（leader/etcd）不带；gocdc_sources/gocdc_source_up | PRD 07 §1 全清单 | L1+L3 | metrics 单测 + 35 组 | ✅ |
 | MS-17 | 旧断言适配：源级失败不再进程退出（A4/A5a/A7 改源 failed(startup)+存活+退避）；etcd 直写键适配 v2（position/stock 下沉 sources/default/） | D5 语义变化如实反映在既有组 | L3 | 10/30/65/70 组适配 | ✅-L3 |
