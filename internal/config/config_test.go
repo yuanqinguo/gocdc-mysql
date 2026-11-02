@@ -106,7 +106,8 @@ func TestValidate_TableDriven(t *testing.T) {
 		{"cluster为空", func(c *Config) { c.Cluster = "" }, []string{"cluster"}},
 		{"cluster与flag不一致", func(c *Config) { c.Cluster = "other" }, []string{"不一致"}},
 		{"rules为空", func(c *Config) { c.Sources[0].Rules = nil }, []string{"rules 不能为空"}},
-		{"无target启用", func(c *Config) { c.Sources[0].Targets.MySQL.Enabled = false }, []string{"至少启用一个下游"}},
+		{"无target启用", func(c *Config) { c.Sources[0].Targets.MySQL.Enabled = false },
+			[]string{"至少启用一个下游", "声明 MySQL 下游须启用"}},
 		// ── source ──
 		{"source.addr为空", func(c *Config) { c.Sources[0].Source.Addr = "" }, []string{"source.addr"}},
 		{"source.addr无端口", func(c *Config) { c.Sources[0].Source.Addr = "10.0.0.1" }, []string{"source.addr"}},

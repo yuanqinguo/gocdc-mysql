@@ -398,3 +398,35 @@ func TestNormalize_V1PartialFields(t *testing.T) {
 		t.Fatalf("v1 部分字段应包装后逐项报缺: %v", res.Errors)
 	}
 }
+
+// TestPureMQDownstream 纯 MQ 下游（targets.mysql.enabled=false）合法：
+// 规则只声明 MQ sink 即可零错误通过；「规则声明 mysql sink 而 targets.mysql
+// 未启用」「ddl_sync=true 而 mysql 未启用」两个矛盾组合启动期拒（fail-fast，
+// 免得首条事件才在路由层炸）。
+func TestPureMQDownstream(t *testing.T) {
+	rmqOnly := func(c *Config) {
+		s := &c.Sources[0]
+		s.Targets.MySQL = MySQLOptions{}
+		s.Targets.RocketMQ = RocketMQOptions{
+			Enabled: true, NameServers: []string{"127.0.0.1:9876"},
+			Group: "GID_gocdc_test", TopicPrefix: "CDC_", OrderBy: "row",
+		}
+		s.Rules[0].Sinks = &RuleSinks{RocketMQ: RuleSink{Enabled: true}}
+	}
+	// 纯 RMQ：零错误
+	if errs := runV(t, rmqOnly); len(errs) != 0 {
+		t.Fatalf("纯 MQ 下游应零错误: %v", errs)
+	}
+	// 规则声明 mysql sink 但 targets.mysql 未启用 → 拒
+	errs := runV(t, func(c *Config) {
+		rmqOnly(c)
+		c.Sources[0].Rules[0].Sinks = &RuleSinks{MySQL: RuleSink{Enabled: true}}
+	})
+	wantErrs(t, errs, "声明 MySQL 下游须启用")
+	// ddl_sync=true 但 targets.mysql.enabled=false → 拒
+	errs = runV(t, func(c *Config) {
+		rmqOnly(c)
+		c.Sources[0].Targets.MySQL = MySQLOptions{DDLSync: true}
+	})
+	wantErrs(t, errs, "DDL 同步仅作用于")
+}

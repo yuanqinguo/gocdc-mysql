@@ -1,7 +1,8 @@
 #!/bin/bash
 # v2 组65：RocketMQ sink（I 系列）——topic 先重置防跨 run 积压污染（新消费组实测
 # 从 EARLIEST 重放）。I0/G5 restock 精准重跑全量快照双写 / I1 信封格式 /
-# I2 增量三方对账 / I6 顺序消息 / I3 broker 宕机单边+位点冻结+恢复补投 / I4 崩溃重放幂等
+# I2 增量三方对账 / I6 顺序消息 / I3 broker 宕机单边+位点冻结+恢复补投 / I4 崩溃重放幂等 /
+# I7 纯 MQ 形态（targets.mysql.enabled=false：boot/单边增量/verify 拒绝）
 set -u
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 API="localhost:8060/api/v1"
@@ -176,6 +177,28 @@ PYEOF
 )
 echo "  I4: $(echo "$I4V" | head -1)"
 echo "$I4V" | grep -q "^PASS" && ok "I4 崩溃重放幂等收敛" || bad "I4 ($(echo "$I4V"|head -1))"
+
+grp "I7 纯 MQ 形态（targets.mysql.enabled=false）：boot + 单边增量 + verify 拒绝"
+# 行为变化：旧装配层「MySQL 直写须启用」强制拒启 → 纯 MQ 合法（05 §1）
+killall_gocdc
+ccput verify "$V2/body_mqonly.yml"
+stub_start node1 verify :9595 :8060
+wait_ready 9595 60 && ok "I7a 纯 MQ boot（mysql 未启用不拒启）" || { bad "I7a boot"; tail -20 /tmp/v2/node1.log; }
+wait_src_state 8060 default running 40 && ok "I7b 管线 running（位点沿用 v2 键）" || bad "I7b state=$(src_state 8060 default)"
+TS7=$(date +%s)
+setsid nohup $RMQCONS -topic CDC_rmqtest_msg -group i7-$TS7 -out /tmp/rmq-i7.jsonl -idle 12s > /tmp/rmqcons-i7.log 2>&1 &
+sleep 4
+$SRC -e "INSERT INTO rmqtest.msg (name,qty,amount,note) VALUES ('i7-a',7,7,'mqonly')" 2>/dev/null
+for i in $(seq 1 20); do LB=$(lagof 9595); [ "$LB" = "0" ] && break; sleep 2; done
+sleep 3
+N7=$(grep -ac 'i7-a' /tmp/rmq-i7.jsonl 2>/dev/null); N7=${N7:-0}
+D7=$($DST -N -e "SELECT COUNT(*) FROM rmqtest.msg WHERE name='i7-a'" 2>/dev/null); D7=${D7:-X}
+echo "  单边: RMQ 收到=$N7（期待≥1）MySQL 侧=$D7（期待0=纯 MQ 不同步目标库）"
+[ "$N7" -ge 1 ] && [ "$D7" = "0" ] && ok "I7c 增量只进 RMQ（单边）" || bad "I7c (n=$N7 dst=$D7)"
+V7=$(curl -s --noproxy '*' -u admin:demo123 -X POST -H 'Content-Type: application/json' \
+  -d '{"database":"rmqtest","table":"msg","pk":"id","sample":10}' \
+  "$API/sources/default/verify?confirm=true")
+echo "$V7" | grep -q "未启用" && ok "I7d verify 拒绝（无 MySQL 目标可对账，语义错误非 panic）" || bad "I7d verify=$V7"
 
 killall_gocdc
 summary

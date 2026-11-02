@@ -9,6 +9,17 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 wipe_all
 ccput verify "$V2/body_main.yml"
 
+# topic 重置必须在任何节点启动前（65 组同款防护）：新消费组实测从 EARLIEST
+# 重放全部积压，且容器重启后 binlog 从 000001 重新编号，event_id（binlog+pos
+# 派生）与旧积压撞同值 → I5 的 dup 统计被跨 run 污染。
+docker exec rmqbroker sh mqadmin deleteTopic -n namesrv:9876 -c DefaultCluster -t CDC_rmqtest_msg >/dev/null 2>&1
+sleep 2
+for i in $(seq 1 20); do
+  R=$(docker exec rmqbroker sh mqadmin updateTopic -n namesrv:9876 -c DefaultCluster -t CDC_rmqtest_msg -a +message.type=FIFO 2>&1 | grep -cE 'topicName|success')
+  [ "${R:-0}" -ge 1 ] && { echo "  topic 重置 ok t=${i}x2s"; break; }
+  sleep 2
+done
+
 stub_start node1 verify :9595 :8060
 L=""
 for i in $(seq 1 20); do L=$(leader_port); [ -n "$L" ] && break; sleep 2; done

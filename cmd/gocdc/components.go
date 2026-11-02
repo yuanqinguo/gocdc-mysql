@@ -61,14 +61,14 @@ func buildComponents(ctx context.Context, cfg *config.Config, spec *config.Sourc
 		Metrics:        met,
 		SourceID:       spec.ID,
 	})
-	if !spec.Targets.MySQL.Enabled {
-		return nil, nil, fmt.Errorf("targets.mysql 未启用（MySQL 直写为终态存储，当前部署须启用）")
+	if !spec.Targets.MySQL.Enabled && !spec.Targets.Kafka.Enabled && !spec.Targets.RocketMQ.Enabled {
+		return nil, nil, fmt.Errorf("targets 未启用任何下游（mysql/kafka/rocketmq 至少一个；配置校验已拦，此处防御）")
 	}
 
 	// 规则 target_database 解析（表级覆盖 > 组级 > targets.mysql.target_database >
 	// 同名）。解析绝不能返回空串：DDL diff（sinks.go DiffTargetTable）与 Web
 	// /verify（admin.go Verify 闭包）直接用该值构造 SQL，空库名即错；同名时
-	// 必须返回源库名。
+	// 必须返回源库名。纯 MQ 下游（mysql 未启用）时无消费者。
 	targetDB := func(schemaName, table string) string {
 		if r := rules.Match(schemaName, table); r != nil && r.TargetDatabase != "" {
 			return r.TargetDatabase
@@ -91,17 +91,23 @@ func buildComponents(ctx context.Context, cfg *config.Config, spec *config.Sourc
 		return ""
 	}
 
-	// MySQL 终态存储 sink（先 MySQL 后 MQ，05 §6）
-	msink, err := mysqlsink.New(mysqlsink.Options{
-		Addr: spec.Targets.MySQL.Addr, User: spec.Targets.MySQL.User,
-		Password: spec.Targets.MySQL.Password, Charset: spec.Targets.MySQL.Charset,
-		MaxOpenConns: spec.Targets.MySQL.MaxOpenConns, MaxIdleConns: spec.Targets.MySQL.MaxIdleConns,
-		ConnMaxLifetime: time.Duration(spec.Targets.MySQL.ConnMaxLifetimeMin) * time.Minute,
-		TxChunkRows:     spec.Targets.MySQL.TxChunkRows, Metrics: met, SourceID: spec.ID,
-		TargetDB: targetDB,
-	})
-	if err != nil {
-		return nil, nil, err
+	// MySQL 终态存储 sink（先 MySQL 后 MQ，05 §6）。可选：纯 MQ 下游
+	// （targets.mysql.enabled=false）合法——对账/DDL diff/verify 闭包随
+	// msink 一并不装配（admin.go/DDL hooks 各自 nil-guard）。
+	var msink *mysqlsink.Sink
+	if spec.Targets.MySQL.Enabled {
+		var err error
+		msink, err = mysqlsink.New(mysqlsink.Options{
+			Addr: spec.Targets.MySQL.Addr, User: spec.Targets.MySQL.User,
+			Password: spec.Targets.MySQL.Password, Charset: spec.Targets.MySQL.Charset,
+			MaxOpenConns: spec.Targets.MySQL.MaxOpenConns, MaxIdleConns: spec.Targets.MySQL.MaxIdleConns,
+			ConnMaxLifetime: time.Duration(spec.Targets.MySQL.ConnMaxLifetimeMin) * time.Minute,
+			TxChunkRows:     spec.Targets.MySQL.TxChunkRows, Metrics: met, SourceID: spec.ID,
+			TargetDB: targetDB,
+		})
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 
 	// Kafka sink（twmb/franz-go）
@@ -150,8 +156,15 @@ func buildComponents(ctx context.Context, cfg *config.Config, spec *config.Sourc
 		rmqSink = rs
 	}
 
-	// 路由 sink：按规则 sinks 装配 SinkGroup（先 MySQL 后 MQ，05 §1/§6）
-	router := pipeline.NewSinkRouter(rules, msink, kafkaSink, rmqSink)
+	// 路由 sink：按规则 sinks 装配 SinkGroup（先 MySQL 后 MQ，05 §1/§6）。
+	// msink 是具体指针类型：nil 的 *mysqlsink.Sink 装进 sink.Sink 接口后
+	// 接口非 nil（typed-nil 坑），router.Ping 的 nil 判断会失效——须先经
+	// 接口变量桥接，未启用时保持真正的接口 nil。
+	var mysqlIf sink.Sink
+	if msink != nil {
+		mysqlIf = msink
+	}
+	router := pipeline.NewSinkRouter(rules, mysqlIf, kafkaSink, rmqSink)
 	if err := router.Ping(ctx); err != nil {
 		return nil, nil, fmt.Errorf("下游目标不可达: %w", err)
 	}
@@ -164,10 +177,11 @@ func buildComponents(ctx context.Context, cfg *config.Config, spec *config.Sourc
 	}
 
 	// ── DDL hooks（08 §2/§3）：diff/apply 闭包（ddl_sync=true 才装配，
-	// 否则 auto 降级 pause）；审批 gate 常备 ──
+	// 否则 auto 降级 pause）；审批 gate 常备。diff/apply 走 MySQL 目标连接，
+	// 纯 MQ 下游（校验层已拒 ddl_sync+mysql 未启用组合）双条件防御 ──
 	ddlGate := pipeline.NewDDLGate(kv, prefix+"/events/ddl")
 	ddlHooks := &pipeline.DDLHooks{Gate: ddlGate}
-	if spec.Targets.MySQL.DDLSync {
+	if spec.Targets.MySQL.Enabled && spec.Targets.MySQL.DDLSync {
 		ddlHooks.DiffTarget = func(ctx context.Context, schemaName, table string) ([]string, bool, string, error) {
 			res, err := mysqlsink.DiffTargetTable(ctx, srcDB, msink.DB(), schemaName, targetDB(schemaName, table), table)
 			if err != nil {

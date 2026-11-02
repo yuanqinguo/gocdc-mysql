@@ -170,13 +170,17 @@ curl -u admin:admin123 -X POST -H 'Content-Type: application/json' \
 
 ### 4.2 targets.mysql（MySQL 直写）
 
+可选下游：`enabled: false` 即纯 MQ 部署（事件只进 Kafka/RocketMQ，无目标
+库——对账/DDL diff/verify 随之不可用）；规则声明 `sinks.mysql` 的源必须
+启用本段（配置校验拦死）。
+
 | 字段 | 说明 |
 |------|------|
 | `addr/user/password/charset` | 目标库连接；目标**同名库表须预建** |
 | `target_database` | 空=与源库同名（推荐）；填了则该实例所有规则写这个库。**规则级同名覆盖**：`rules[].target_database`（库级/表级）解析优先于全局 |
 | `max_open_conns` | 必须 ≥1（连接池上限）；`max_idle_conns` 默认 5 |
 | `tx_chunk_rows` | 单事务最大行数（500），大事务切块提交 |
-| `ddl_sync` | true 时允许 auto/审批策略在目标执行白名单 DDL |
+| `ddl_sync` | true 时允许 auto/审批策略在目标执行白名单 DDL（仅 MySQL 直写下游；mysql 未启用时配置校验拒绝） |
 
 ### 4.3 targets.kafka（Kafka 下游）
 

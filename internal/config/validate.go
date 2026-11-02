@@ -175,6 +175,11 @@ func validateSourceSpec(spec *SourceSpec, prefix string, errf func(string, ...an
 			errf("%stargets.mysql.target_database=%q 含非法字符（库名允许点，如 edu.mall.merge；禁止空白/反引号/路径符）", prefix, m.TargetDatabase)
 		}
 	}
+	// ddl_sync 只作用于 MySQL 直写下游：纯 MQ 部署（mysql 未启用）下该开关
+	// 无处生效，显式报错而非静默忽略（防「以为在同步 DDL」的错觉）
+	if !t.MySQL.Enabled && t.MySQL.DDLSync {
+		errf("%stargets.mysql.ddl_sync=true 但 targets.mysql.enabled=false（DDL 同步仅作用于 MySQL 直写下游）", prefix)
+	}
 	if k := t.Kafka; k.Enabled {
 		if len(k.Brokers) == 0 {
 			errf("%stargets.kafka.brokers 不能为空", prefix)
@@ -272,6 +277,11 @@ func validateSourceSpec(spec *SourceSpec, prefix string, errf func(string, ...an
 			errf("%s.sinks 未配置（组级必填，至少启用一个下游）", path)
 		} else {
 			validateSinks(r.Sinks, path, errf)
+			// sinks 与 targets 交叉核对：声明 mysql sink 则该源必须启用
+			// targets.mysql（启动期 fail-fast，否则首条事件才在路由层炸）
+			if r.Sinks.MySQL.Enabled && !t.MySQL.Enabled {
+				errf("%s.sinks.mysql=true 但 targets.mysql.enabled=false（声明 MySQL 下游须启用 targets.mysql）", path)
+			}
 		}
 		if r.DDLPolicy == "" {
 			r.DDLPolicy = "pause" // 安全默认（08/16 修订）

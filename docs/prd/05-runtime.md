@@ -16,7 +16,7 @@
 | **源库连接池 srcDB** | 每源 | `openSourceDB` 逐源：`SetMaxOpenConns(4 + spec.stock.workers)`（沿用现行公式，bootstrap.go:200） |
 | **schema.Manager** | 每源 | 缓存键仍为 `db.table`——**实例隔离替代键前缀**，零改动复用（源内本就一组一库不冲突） |
 | **Transformer** | 每源 | 绑定该源 `source.timezone`；maskers 缓存随实例 |
-| **三个 sink（mysql/kafka/rocketmq）** | 每源 | 独立连接池/生产者（= N 个集群各自的池）；`router.Ping` fail-fast 逐源 |
+| **sink（按 targets 启用装配）** | 每源 | 独立连接池/生产者（= N 个集群各自的池）；mysql/kafka/rocketmq 任一可缺（纯 MQ 下游合法），`router.Ping` 只 ping 已启用项，fail-fast 逐源 |
 | **SinkRouter** | 每源 | 规则→SinkGroup 映射随源 |
 | **verifyTargetTables（启动目标表核对）** | 每源 | 启动期逐源执行（D5：失败只停该源） |
 | **DDLGate + DDLHooks** | 每源 | key 在源子树；审批 API 逐源 |

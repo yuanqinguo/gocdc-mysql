@@ -82,6 +82,9 @@ func buildSourceDeps(rt *app, src *sourceState) *api.SourceDeps {
 		if err != nil {
 			return nil, err
 		}
+		if b.comp.mysql == nil { // 纯 MQ 下游：无目标库可对账（409 语义）
+			return nil, errors.New("targets.mysql 未启用：抽样对账仅支持 MySQL 直写下游")
+		}
 		vctx, cancel := context.WithTimeout(vctx, 2*time.Minute)
 		defer cancel()
 		return verify.CompareTable(vctx, &verify.Options{

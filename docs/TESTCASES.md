@@ -187,6 +187,10 @@ L3 脚本 `.verify/v2/35_ms_core.sh`（数据面）+ `46_ms_ha.sh`（故障面�
 2. **leader 流程早退**（P2 冒烟）：runLeaderFlow 启动完源流程即返回，defer 立即清
    leading/leadCtxRef → 延迟就绪源与 pause→resume 永远无法启动。修复=leader 流程阻塞至
    任期结束（任期态存活整届）。
+3. **纯 MQ 形态 typed-nil panic**（65 组 I7 首轮）：msink 条件化后，nil 的
+   `*mysqlsink.Sink` 装进 `sink.Sink` 接口参数 → 接口非 nil → router.Ping 的
+   `s == nil` 判断失效 → nil receiver panic（与 ADV-15 同类坑，具体指针类型
+   必须先经接口变量桥接）。修复=装配点显式桥接 + I7 L3 常驻回归。
 
 ## 8. MQ sink（MQ）
 
@@ -197,6 +201,7 @@ L3 脚本 `.verify/v2/35_ms_core.sh`（数据面）+ `46_ms_ha.sh`（故障面�
 | MQ-03 | 增量三方对账（源=目标=消费态） | 746 事件去重 622 行一致 | L3 | rmq_compare.py | ✅-L3 |
 | MQ-04 | broker 宕机双写单边语义（MySQL 照写位点冻结 RMQ 重试） | 恢复自动补投 | L3 | 验收 I3 | ✅-L3 |
 | MQ-05 | 崩溃重放幂等（84 重复按 event_id 去重） | 消费端去重收敛 | L3 | 验收 I4 | ✅-L3 |
+| MQ-07 | 纯 MQ 形态（targets.mysql.enabled=false）：boot 不拒启、增量只进 MQ 不同步目标库、verify 语义拒绝（非 panic） | 单边语义成立；矛盾组合（sinks.mysql 未启用 targets / ddl_sync）配置校验拒启 | L1+L3 | config TestPureMQDownstream + 验收 I7 | ✅ |
 | MQ-06 | 集群单产出（单 leader 恰一份） | 10 写=10 消息；切换后 100=100 | L3 | 验收 I5 | ✅-L3 |
 | MQ-UNIT-01 | topic 命名（Kafka/RocketMQ 统一 {db}_{table}，点号一律不收；override 优先，覆盖值/topic_prefix 启动校验同样拒点） | 统一命名 + 拒点校验 | L1 | TestTopicName + config 表驱动 | ✅ |
 | MQ-UNIT-02 | 错误分类：gRPC 瞬态可重试/配置类永久 | 错误分类正确性 | L1 | TestIsRetryable | ✅ |

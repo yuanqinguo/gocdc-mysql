@@ -98,7 +98,7 @@ sources:
 |---|------|-------------|
 | V1 | `sources` 非空且 ≤ 64 条 | 「sources 至少 1 条、至多 64 条（容量规划见 PRD 05 §5）」 |
 | V2 | 每个源 id 匹配 `^[a-z][a-z0-9_-]{1,31}$` 且 cluster 内唯一 | 指明冲突的两个下标 |
-| V3 | 现行全部**源内**校验逐源执行：source 必填项、targets 至少启用一个、rules 非空、一组一库（源内）、表级字段、mask/exclude、TLS 成对…… | 错误信息带 `[sources/{sid}]` 前缀定位 |
+| V3 | 现行全部**源内**校验逐源执行：source 必填项、targets 至少启用一个、rules 非空、一组一库（源内）、表级字段、mask/exclude、TLS 成对、sinks↔targets 交叉（规则声明 mysql sink 须启用 targets.mysql；ddl_sync 仅 MySQL 直写下游）…… | 错误信息带 `[sources/{sid}]` 前缀定位 |
 | V4 | **跨源目标不相交**（D6）：MySQL `(addr, target_database, table)` 三元组、Kafka `(排序后 brokers, topic)`、RocketMQ `(排序后 name_servers, topic)` 各自全局唯一 | 报出冲突的两个源与目标名 |
 | V5 | 跨源 `server_id` 冲突提示：两个源 `source.addr` **完全相同**且 server_id 相同 → 报错（同实例互踢，必然踩）；addr 不同则无法判定，文档提示人工确认（§5） | — |
 | V6 | 源级 pipeline/stock 覆盖后的合并值逐源过现行范围校验（workers 1..64 等） | — |
