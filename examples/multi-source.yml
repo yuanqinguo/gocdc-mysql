@@ -1,0 +1,108 @@
+# ─────────────────────────────────────────────────────────────────────
+# 多源形态示例（config_version: 2，sources[]）
+#   单进程承载多个同步源：每源独立连接池/位点子树（/gocdc/{cluster}/
+#   sources/{sid}/...）/规则/下游，失败隔离（某源装配失败 failed+退避重试，
+#   其余源不受影响）。上限 64 源；源数 1 条时等价单源形态。
+#
+# 本例：src-a（订单库 msa@13306）+ src-b（用户库 msb@13406）两源聚合写入
+# 同一目标实例的 ms_merged 库——跨源目标不相交（V4）校验保证不撞表
+#（msa.orders→ms_merged.orders，msb.users→ms_merged.users，表名互异）。
+#
+# 本文件可在验证环境跑通（.verify/v2/examples_accept.sh）。
+# ─────────────────────────────────────────────────────────────────────
+config_version: 2
+cluster: gocdc-ms
+
+node: {}
+
+ha:
+  enabled: true                  # 多源 + 集群可组合：leader 承担全部源的管线
+  lease_ttl_seconds: 10
+  leader_check_interval_ms: 2000
+  resign_on_shutdown: true
+
+pipeline:                        # 集群默认（各源可源级覆盖）
+  workers: 4
+  worker_queue_size: 8192
+  batch_size: 500
+  flush_interval_ms: 200
+  position_save_interval_ms: 3000
+
+stock:                           # 集群默认
+  lock_mode: auto
+  chunk_rows: 5000
+  throttle_ms: 0
+  workers: 4
+
+sources:
+  - id: src-a                    # ^[a-z][a-z0-9_-]{1,31}$，cluster 内唯一
+    source:
+      addr: "127.0.0.1:13306"
+      user: root
+      password: "123456"         # 生产：${SRC_A_PASSWORD}
+      charset: utf8mb4
+      flavor: mysql
+      # server_id 缺省 0 = 按 node.id:sid 派生（同进程多源天然互异）
+      timezone: UTC
+      exclude_schemas: [mysql, sys, information_schema, performance_schema]
+      use_gtid: true
+    pipeline:                    # 源级覆盖演示：订单量大，单独放大并行度
+      workers: 8                 # 其余字段继承集群默认（0 值=未设=继承）
+    targets:
+      mysql:
+        enabled: true
+        addr: "127.0.0.1:13307"
+        user: root
+        password: "123456"       # 生产：${DST_PASSWORD}
+        charset: utf8mb4
+        max_open_conns: 10       # 容量口径：总连接 = Σ各源 max_open_conns
+        tx_chunk_rows: 500
+        target_database: ms_merged
+        ddl_sync: true
+    rules:
+      - schema: msa
+        sinks: { mysql: true }
+        ddl_policy: pause
+        tables:
+          - { table: orders, order_by_column: id, do_stock: true }
+
+  - id: src-b
+    source:
+      addr: "127.0.0.1:13406"    # 第二源库实例
+      user: root
+      password: "123456"
+      charset: utf8mb4
+      flavor: mysql
+      timezone: UTC
+      exclude_schemas: [mysql, sys, information_schema, performance_schema]
+      use_gtid: true
+    # pipeline 省略 = 全部继承集群默认
+    targets:
+      mysql:
+        enabled: true
+        addr: "127.0.0.1:13307"  # 同一目标实例：V4 保证两源目标 (库,表) 不相交
+        user: root
+        password: "123456"
+        charset: utf8mb4
+        max_open_conns: 10
+        tx_chunk_rows: 500
+        target_database: ms_merged
+        ddl_sync: true
+    rules:
+      - schema: msb
+        sinks: { mysql: true }
+        ddl_policy: pause
+        tables:
+          - { table: users, order_by_column: id, do_stock: true }
+
+observability:
+  metrics_addr: ${METRICS_ADDR}                # /metrics /healthz /readyz（生产写实际端口，如 ":9595"）
+  web:
+    enabled: true
+    addr: ${WEB_ADDR}                  # admin API + 控制台 /api/v1（生产写实际端口，如 ":8060"）
+    username: admin
+    password: ${WEB_PASSWORD}
+    auth_disabled: false
+  log:
+    level: info
+    json: false
