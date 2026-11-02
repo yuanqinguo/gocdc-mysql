@@ -101,6 +101,9 @@ export function AppLayout() {
     return count > 99 ? '99+' : String(count).padStart(2, '0')
   }
 
+  // 主导航保持源上下文：单源视图切页不丢 ?source=（品牌回总控台除外——聚合视图是合理默认）
+  const withSource = (path: string) => currentSid ? `${path}?source=${encodeURIComponent(currentSid)}` : path
+
   return (
     <div className="app-shell">
       <header className="commandbar">
@@ -141,7 +144,7 @@ export function AppLayout() {
         <div className="command-nav">
           <nav className="primary-nav" aria-label="主导航">
             {NAV_ITEMS.map((item) => (
-              <Link key={item.key} to={item.key} className={`nav-item ${active === item.key ? 'is-active' : ''}`}>
+              <Link key={item.key} to={withSource(item.key)} className={`nav-item ${active === item.key ? 'is-active' : ''}`}>
                 <span className="nav-icon">{item.icon}</span>
                 <span className="nav-label">{item.label}</span>
                 {item.badge === 'ddl' && pendingDDL > 0 && <span className="nav-badge">{badgeText(pendingDDL)}</span>}
@@ -182,7 +185,7 @@ export function AppLayout() {
           {NAV_ITEMS.map((item) => (
             <Link
               key={item.key}
-              to={item.key}
+              to={withSource(item.key)}
               className={`drawer-link ${active === item.key ? 'is-active' : ''}`}
               onClick={() => setMobileNavOpen(false)}
             >

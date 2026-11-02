@@ -3,7 +3,6 @@ import { App as AntApp, Button, Segmented } from 'antd'
 import { CodeOutlined, CopyOutlined, DatabaseOutlined, SafetyCertificateOutlined } from '@ant-design/icons'
 import { useQueries } from '@tanstack/react-query'
 import { useApi } from '@/app/api'
-import { useSourceScope } from '@/app/sourceScope'
 import { queryKeys, useConfig, useDDLEventsAll, useStatus } from '@/shared/api/queries'
 import { Callout } from '@/shared/components/Callout'
 import { ErrorState, LoadingState } from '@/shared/components/PageState'
@@ -15,7 +14,6 @@ type ConfigTab = 'config' | 'rules'
 
 export function ConfigPage() {
   const [tab, setTab] = useState<ConfigTab>('config')
-  const { currentSid } = useSourceScope()
   const { message } = AntApp.useApp()
   const config = useConfig()
   const [copied, setCopied] = useState(false)
@@ -35,9 +33,9 @@ export function ConfigPage() {
   return <>
     <PageHeader
       code="05"
-      eyebrow={currentSid ? `系统 / 运行配置 · 源 ${currentSid}` : '系统 / 运行配置'}
+      eyebrow="系统 / 运行配置 · 集群级"
       title="生效配置"
-      description="查看当前生效配置与编译后的规则视图（组形态白名单）。修改须在外部配置中心完成并重启服务。"
+      description="集群全量配置文档（含全部 sources[]）与编译后的规则视图（组形态白名单）。修改须在外部配置中心完成并重启服务。"
     />
     <Callout tone="info" title="只读视图">
       配置仅可查看，不在管理台编辑。敏感字段由服务端打码；请勿将页面内容复制到公开渠道。

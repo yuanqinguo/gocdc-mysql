@@ -10,7 +10,9 @@ import { Chip, CodeValue } from '@/shared/components/presentation'
 
 export function AuditPage() {
   const { currentSid } = useSourceScope()
-  const { data: entries = [], isPending, error, refetch } = useAudit()
+  const { data: allEntries = [], isPending, error, refetch } = useAudit()
+  // 源作用域真过滤：选中源时只显示该源的操作（source 为空=集群级操作，单源视图不显示）
+  const entries = currentSid ? allEntries.filter((entry) => entry.source === currentSid) : allEntries
   const successCount = entries.filter((entry) => entry.result === 'ok').length
   const failureCount = entries.length - successCount
   const columns: ColumnsType<AuditEntry> = [
@@ -43,7 +45,9 @@ export function AuditPage() {
       code="06"
       eyebrow={currentSid ? `系统 / 操作审计 · 源 ${currentSid}` : '系统 / 操作审计'}
       title="审计日志"
-      description="最近 100 条管理操作记录，由服务端写入 etcd；失败操作同样留痕。「源」列为空表示集群级操作。"
+      description={currentSid
+        ? `源「${currentSid}」的管理操作记录（已按源过滤）；失败操作同样留痕。查看全部源请切回「全部源」。`
+        : '最近 100 条管理操作记录，由服务端写入 etcd；失败操作同样留痕。「源」列为空表示集群级操作。'}
       extra={<Button icon={<ReloadOutlined />} onClick={() => void refetch()}>刷新记录</Button>}
     />
     {error ? <ErrorState error={error} onRetry={() => void refetch()} /> : isPending ? <LoadingState /> : <>
@@ -59,7 +63,7 @@ export function AuditPage() {
         <Table<AuditEntry> className="admin-table audit-table" rowKey={(row) => `${row.at}-${row.node}-${row.what}`}
           columns={columns} dataSource={entries} loading={isPending} scroll={{ x: 970 }}
           pagination={{ pageSize: 15, showTotal: (total) => `共 ${total} 条审计记录`, pageSizeOptions: [15, 30, 50] }}
-          locale={{ emptyText: '暂无管理操作记录' }} />
+          locale={{ emptyText: currentSid ? '该源暂无操作记录（集群级操作不在此列示）' : '暂无管理操作记录' }} />
       </div>
     </>}
   </>
