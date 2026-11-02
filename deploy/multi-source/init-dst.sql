@@ -1,0 +1,14 @@
+-- 多源演示 · 聚合目标：两源数据汇入 ms_merged（表名互异，V4 合法）
+CREATE DATABASE IF NOT EXISTS ms_merged CHARACTER SET utf8mb4;
+CREATE TABLE ms_merged.orders (
+  id BIGINT NOT NULL AUTO_INCREMENT,
+  val VARCHAR(64) NULL,
+  amt DECIMAL(10,2) NOT NULL DEFAULT 0,
+  PRIMARY KEY (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+CREATE TABLE ms_merged.users (
+  id BIGINT NOT NULL AUTO_INCREMENT,
+  name VARCHAR(64) NULL,
+  phone VARCHAR(20) NULL,
+  PRIMARY KEY (id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

@@ -161,7 +161,7 @@ func TestPersister_ForceAndCircuit(t *testing.T) {
 	store := &memStore{gateOK: true}
 
 	circ := make(chan error, 1)
-	p := NewPersister(wm, store, time.Hour, 3, "n1", 7, nil, nil, func(e error) { circ <- e }, nil)
+	p := NewPersister(wm, store, time.Hour, 3, "", "n1", 7, nil, nil, func(e error) { circ <- e }, nil)
 	pctx, stopP := context.WithCancel(context.Background())
 	defer stopP()
 	go func() { _ = p.Run(pctx) }()
@@ -211,7 +211,7 @@ func TestPersister_MaxFailures(t *testing.T) {
 	wm.Ack(1)
 	store := &memStore{gateOK: false} // 全部失败
 	circ := make(chan error, 1)
-	p := NewPersister(wm, store, time.Hour, 3, "n", 0, nil, nil, func(e error) { circ <- e }, nil)
+	p := NewPersister(wm, store, time.Hour, 3, "", "n", 0, nil, nil, func(e error) { circ <- e }, nil)
 	pctx, stopP := context.WithCancel(context.Background())
 	defer stopP()
 	go func() { _ = p.Run(pctx) }()

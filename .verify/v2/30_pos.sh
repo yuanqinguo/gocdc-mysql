@@ -46,13 +46,13 @@ echo "  distinct 差值=$DUP（期待0）"
 [ "$S" = "$D" ] && [ "$DUP" = "0" ] && ok "C2 重启重放幂等收敛零重复（$S 行）" || bad "C2 (src=$S dst=$D dup=$DUP)"
 
 grp "C3 位点回拨（必须停机后做）"
-KEY=$($ETCDC get /gocdc/verify/position --print-value-only)
+KEY=$($ETCDC get /gocdc/verify/sources/default/position --print-value-only)
 echo "  当前位点: $(echo "$KEY" | head -c 120)..."
 kill -TERM $(pickpid node1) 2>/dev/null
 for i in $(seq 1 30); do [ -z "$(pickpid node1)" ] && break; sleep 1; done
 [ -n "$(pickpid node1)" ] && { echo "FATAL 优雅停机超时"; exit 1; }
 NEWPOS=$(echo "$KEY" | python3 -c "import sys,json;d=json.load(sys.stdin);d['pos']=d['pos']-20000;print(json.dumps(d))")
-$ETCDC put /gocdc/verify/position "$NEWPOS" >/dev/null
+$ETCDC put /gocdc/verify/sources/default/position "$NEWPOS" >/dev/null
 echo "  已回拨 20000 字节，重启重放"
 stub_start node1 verify :9595 :8060
 wait_ready 9595 60 || bad "C3 重启失败"
@@ -84,7 +84,7 @@ $SRC -e "FLUSH BINARY LOGS" 2>/dev/null
 OLDEST=$($SRC -N -e "SHOW BINARY LOGS" 2>/dev/null | head -1 | awk '{print $1}')
 NEWFILE=$($SRC -N -e "SHOW BINARY LOGS" 2>/dev/null | tail -1 | awk '{print $1}')
 GTID=$($SRC -N -e "SELECT @@global.gtid_executed" 2>/dev/null)
-$ETCDC put /gocdc/verify/position "{\"v\":1,\"name\":\"$OLDEST\",\"pos\":4,\"gtid_set\":\"$GTID\",\"seq\":1,\"leader_term\":1,\"node_id\":\"node1\"}" >/dev/null
+$ETCDC put /gocdc/verify/sources/default/position "{\"v\":1,\"name\":\"$OLDEST\",\"pos\":4,\"gtid_set\":\"$GTID\",\"seq\":1,\"leader_term\":1,\"node_id\":\"node1\"}" >/dev/null
 $SRC -e "PURGE BINARY LOGS TO '$NEWFILE'" 2>/dev/null
 echo "  位点拨到已 PURGE 的 $OLDEST:4（现存: $($SRC -N -e 'SHOW BINARY LOGS' 2>/dev/null | awk '{print $1}' | tr '\n' ' ')）"
 # 前台启动 → 期待 PURGED 拒启 exit≠0
@@ -103,7 +103,7 @@ cp "$BIN" $d/gocdcbin
 echo "  拒启 exit=$(cat $d/exit.log): $(grep -iE 'purged|缺口|拒|不启' $d/out.log | head -2)"
 [ "$(cat $d/exit.log)" != "0" ] && grep -qiE 'purged|缺口|早于' $d/out.log && ok "C5a PURGED 拒启增量" || bad "C5a"
 # 恢复：位点拨到现存最新文件头
-$ETCDC put /gocdc/verify/position "{\"v\":1,\"name\":\"$NEWFILE\",\"pos\":4,\"gtid_set\":\"$GTID\",\"seq\":1,\"leader_term\":1,\"node_id\":\"node1\"}" >/dev/null
+$ETCDC put /gocdc/verify/sources/default/position "{\"v\":1,\"name\":\"$NEWFILE\",\"pos\":4,\"gtid_set\":\"$GTID\",\"seq\":1,\"leader_term\":1,\"node_id\":\"node1\"}" >/dev/null
 stub_start node1 verify :9595 :8060
 wait_ready 9595 60 || bad "C5b 恢复启动失败"
 sleep 3

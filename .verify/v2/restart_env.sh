@@ -1,5 +1,5 @@
 #!/bin/bash
-docker start vf-src vf-dst vf-etcd cfg-etcd rmqnamesrv rmqbroker 2>&1 | head -6
+docker start vf-src vf-src2 vf-dst vf-dst2 vf-etcd cfg-etcd rmqnamesrv rmqbroker 2>&1 | head -6
 sleep 10
 for i in $(seq 1 40); do
   S=$(docker exec vf-src mysql -uroot -p123456 -h127.0.0.1 -N -e "SELECT 1" 2>/dev/null)

@@ -18,7 +18,9 @@ func multiSourceDeps(t *testing.T) (Deps, *fakeGate, *fakeGate) {
 	mk := func(sid string, gate *fakeGate) *SourceDeps {
 		return &SourceDeps{
 			ID: sid, Store: position.NewStore(nil, "/"+sid, "", 0),
-			Rules: mustRules(), Gate: gate, DDLLister: gateLister{gate},
+			Rules:     func() *pipeline.CompiledRules { return mustRules() },
+			Gate:      func() pipeline.DDLGate { return gate },
+			DDLLister: func() pipeline.DDLLister { return gateLister{gate} },
 		}
 	}
 	ga, gb := &fakeGate{}, &fakeGate{}

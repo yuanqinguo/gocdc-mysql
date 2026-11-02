@@ -133,7 +133,7 @@ func (s *sourceState) pipelineSnapshot(met *metrics.Metrics) api.PipelineSnapsho
 			}
 		}
 		if met != nil {
-			if lagBytes, ok := met.MasterPositionLagBytesValue(); ok {
+			if lagBytes, ok := met.MasterPositionLagBytesValue(s.sid); ok {
 				snap.MasterLag, snap.HasCatchup = lagBytes, true
 			}
 		}

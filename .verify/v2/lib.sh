@@ -31,7 +31,9 @@ RMQCONS="$V1/rmqcons-bin"
 export REPO V1 V2 BIN RMQCONS
 
 SRC="docker exec vf-src mysql -uroot -p123456 -h127.0.0.1 --default-character-set=utf8mb4"
+SRC2="docker exec vf-src2 mysql -uroot -p123456 -h127.0.0.1 --default-character-set=utf8mb4"
 DST="docker exec vf-dst mysql -uroot -p123456 -h127.0.0.1 --default-character-set=utf8mb4"
+DST2="docker exec vf-dst2 mysql -uroot -p123456 -h127.0.0.1 --default-character-set=utf8mb4"
 CFGC="docker exec cfg-etcd etcdctl --endpoints=127.0.0.1:2379 --command-timeout=15s"
 ETCDC="docker exec vf-etcd etcdctl --endpoints=127.0.0.1:2379 --command-timeout=15s"
 
@@ -169,4 +171,103 @@ wipe_all(){
   $CFGC del --prefix /gocdc/ >/dev/null
   echo "  [wipe] 协调面+配置中心 /gocdc/ 全清"
   wipe_data || exit 1
+}
+
+# ---- 多源组（MS 系列）公共设施 ----
+# ms_wipe: 双源+双目标整库重建。src-a=vf-src(13306) 的 msa 库、src-b=vf-src2(13406)
+# 的 msb 库；聚合形态两源同写 vf-dst(13307) 的 ms_merged，分库形态各写各的
+#（ms_merged_a→vf-dst、ms_merged_b→vf-dst2，body_ms_split.yml）。
+ms_wipe(){
+  local err
+  $SRC -e "DROP DATABASE IF EXISTS msa; CREATE DATABASE msa CHARACTER SET utf8mb4;
+CREATE TABLE msa.orders (id BIGINT NOT NULL AUTO_INCREMENT, val VARCHAR(64) NULL, amt DECIMAL(10,2) NOT NULL DEFAULT 0, PRIMARY KEY (id)) ENGINE=InnoDB;
+CREATE TABLE msa.evlog (id BIGINT NOT NULL AUTO_INCREMENT, v INT NULL, PRIMARY KEY (id)) ENGINE=InnoDB;
+INSERT INTO msa.orders (val,amt) SELECT CONCAT('a-seed-',n), n*1.5 FROM (WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM s WHERE n<50) SELECT n FROM s) t;
+INSERT INTO msa.evlog (v) VALUES (1),(2),(3);" 2>&1 | grep -v "password on the command" && err=1
+  $SRC2 -e "DROP DATABASE IF EXISTS msb; CREATE DATABASE msb CHARACTER SET utf8mb4;
+CREATE TABLE msb.users (id BIGINT NOT NULL AUTO_INCREMENT, name VARCHAR(64) NULL, phone VARCHAR(20) NULL, PRIMARY KEY (id)) ENGINE=InnoDB;
+CREATE TABLE msb.evlog (id BIGINT NOT NULL AUTO_INCREMENT, v INT NULL, PRIMARY KEY (id)) ENGINE=InnoDB;
+CREATE TABLE msb.tlog (id BIGINT NOT NULL AUTO_INCREMENT, v INT NULL, PRIMARY KEY (id)) ENGINE=InnoDB;
+INSERT INTO msb.users (name,phone) SELECT CONCAT('b-seed-',n), CONCAT('1390000',LPAD(n,4,'0')) FROM (WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM s WHERE n<60) SELECT n FROM s) t;
+INSERT INTO msb.tlog (v) VALUES (10),(20),(30);" 2>&1 | grep -v "password on the command" && err=1
+  for pair in "vf-dst:ms_merged" "vf-dst:ms_merged_a" "vf-dst2:ms_merged_b"; do
+    local c=${pair%%:*} db=${pair##*:}
+    docker exec "$c" mysql -uroot -p123456 -h127.0.0.1 -e \
+      "DROP DATABASE IF EXISTS \`$db\`; CREATE DATABASE \`$db\` CHARACTER SET utf8mb4" 2>&1 | grep -v "password on the command" && err=1
+  done
+  # 聚合/分库两形态的目标表结构（同名同列约束：启动核对 fail-fast 要求预建；
+  # 白名单内全部表都要建——evlog 虽 do_stock=false 也在核对清单）
+  docker exec vf-dst mysql -uroot -p123456 -h127.0.0.1 -e "
+CREATE TABLE IF NOT EXISTS ms_merged.orders (id BIGINT NOT NULL AUTO_INCREMENT, val VARCHAR(64) NULL, amt DECIMAL(10,2) NOT NULL DEFAULT 0, PRIMARY KEY (id)) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS ms_merged.users (id BIGINT NOT NULL AUTO_INCREMENT, name VARCHAR(64) NULL, phone VARCHAR(20) NULL, PRIMARY KEY (id)) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS ms_merged.evlog (id BIGINT NOT NULL AUTO_INCREMENT, v INT NULL, PRIMARY KEY (id)) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS ms_merged.tlog (id BIGINT NOT NULL AUTO_INCREMENT, v INT NULL, PRIMARY KEY (id)) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS ms_merged_a.orders (id BIGINT NOT NULL AUTO_INCREMENT, val VARCHAR(64) NULL, amt DECIMAL(10,2) NOT NULL DEFAULT 0, PRIMARY KEY (id)) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS ms_merged_a.users (id BIGINT NOT NULL AUTO_INCREMENT, name VARCHAR(64) NULL, phone VARCHAR(20) NULL, PRIMARY KEY (id)) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS ms_merged_a.evlog (id BIGINT NOT NULL AUTO_INCREMENT, v INT NULL, PRIMARY KEY (id)) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS ms_merged_a.tlog (id BIGINT NOT NULL AUTO_INCREMENT, v INT NULL, PRIMARY KEY (id)) ENGINE=InnoDB;" 2>&1 | grep -v "password on the command" && err=1
+  docker exec vf-dst2 mysql -uroot -p123456 -h127.0.0.1 -e "
+CREATE TABLE IF NOT EXISTS ms_merged_b.orders (id BIGINT NOT NULL AUTO_INCREMENT, val VARCHAR(64) NULL, amt DECIMAL(10,2) NOT NULL DEFAULT 0, PRIMARY KEY (id)) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS ms_merged_b.users (id BIGINT NOT NULL AUTO_INCREMENT, name VARCHAR(64) NULL, phone VARCHAR(20) NULL, PRIMARY KEY (id)) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS ms_merged_b.evlog (id BIGINT NOT NULL AUTO_INCREMENT, v INT NULL, PRIMARY KEY (id)) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS ms_merged_b.tlog (id BIGINT NOT NULL AUTO_INCREMENT, v INT NULL, PRIMARY KEY (id)) ENGINE=InnoDB;" 2>&1 | grep -v "password on the command" && err=1
+  if [ -n "${err:-}" ]; then
+    echo "  [ms-wipe] ❌ ms_wipe 有 SQL 错误（见上行）"
+    return 1
+  fi
+  rm -f /tmp/rmq-msa.jsonl /tmp/rmq-msb.jsonl
+  echo "  [ms-wipe] 双源(msa@13306/msb@13406)+双目标(ms_merged@13307/ms_merged_b@13407) 重建完成"
+}
+
+# src_state <web_port> <sid>：/status 里某源 pipeline_state（多源视图数据面）
+src_state(){
+  curl -s --max-time 3 --connect-timeout 2 --noproxy '*' -u admin:demo123 \
+    "localhost:$1/api/v1/status" | jget "next((s['pipeline_state'] for s in d['sources'] if s['id']=='$2'), 'MISSING')" 2>/dev/null
+  echo
+}
+# src_phase <web_port> <sid>：/status 里某源装配 phase（starting/ready/failed）
+src_phase(){
+  curl -s --max-time 3 --connect-timeout 2 --noproxy '*' -u admin:demo123 \
+    "localhost:$1/api/v1/status" | jget "next((s['phase'] for s in d['sources'] if s['id']=='$2'), 'MISSING')" 2>/dev/null
+  echo
+}
+# wait_src_state <web_port> <sid> <want> [timeout_s]：等某源到位（任一 phase 可前缀匹配 state）
+wait_src_state(){
+  local port=$1 sid=$2 want=$3 i=0
+  while [ $i -lt "${4:-60}" ]; do
+    [ "$(src_state "$port" "$sid")" = "$want" ] && return 0
+    i=$((i+1)); sleep 1
+  done
+  return 1
+}
+# wait_row <dst_cmd> <sql> <want> [timeout_s]：轮询目标库标量值到位（PLAYBOOK §5
+# 套路——MySQL 落地断言禁止裸 sleep 后一次判）
+wait_row(){
+  local dcmd=$1 sql=$2 want=$3 i=0 got=""
+  while [ $i -lt "${4:-20}" ]; do
+    got=$($dcmd -N -e "$sql" 2>/dev/null)
+    [ "$got" = "$want" ] && return 0
+    i=$((i+1)); sleep 1
+  done
+  echo "  [wait_row] 超时: got=$got want=$want sql=$sql"
+  return 1
+}
+# wait_log <file> <pattern> [timeout_s]：轮询日志出现模式（源装配失败类断言——
+# 装配与 healthz 并发，healthz 就绪 ≠ 装配已出结果）
+wait_log(){
+  local file=$1 pat=$2 i=0
+  while [ $i -lt "${3:-30}" ]; do
+    grep -q "$pat" "$file" 2>/dev/null && return 0
+    i=$((i+1)); sleep 1
+  done
+  return 1
+}
+# wait_phase <web_port> <sid> <want> [timeout_s]：轮询某源装配 phase
+wait_phase(){
+  local port=$1 sid=$2 want=$3 i=0
+  while [ $i -lt "${4:-30}" ]; do
+    [ "$(src_phase "$port" "$sid" | tr -d '[:space:]')" = "$want" ] && return 0
+    i=$((i+1)); sleep 1
+  done
+  return 1
 }

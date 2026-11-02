@@ -1,5 +1,6 @@
 #!/bin/bash
-# v2 环境整体重建：容器/卷全清 → 重建 6 容器 → 编译二进制 → 建库播种 → FIFO topic → 健康自检
+# v2 环境整体重建：容器/卷全清 → 重建 8 容器（含多源组专用 vf-src2/vf-dst2）→
+# 编译二进制 → 建库播种 → FIFO topic → 健康自检
 # 之后每个 case 组用 lib.sh wipe_all 做组级恢复。
 set -u
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -10,7 +11,7 @@ rm -rf /tmp/v2 /tmp/rmq-*.jsonl /tmp/rmqcons-*.log /tmp/c5.out /tmp/stub* 2>/dev
 echo done
 
 echo "════ 1) 容器全清（含卷）"
-docker rm -f -v vf-src vf-dst vf-etcd cfg-etcd rmqnamesrv rmqbroker 2>/dev/null
+docker rm -f -v vf-src vf-src2 vf-dst vf-dst2 vf-etcd cfg-etcd rmqnamesrv rmqbroker 2>/dev/null
 docker network create gocdc-verify 2>/dev/null || true
 
 echo "════ 2) 重建容器"
@@ -21,7 +22,20 @@ docker run -d --name vf-src --network gocdc-verify -p 13306:3306 \
   --character-set-server=utf8mb4 --collation-server=utf8mb4_0900_ai_ci \
   --cte-max-recursion-depth=500000 >/dev/null
 
+# 多源组专用第二源库（MS-01~16：单进程双源的第二条 binlog 流）
+docker run -d --name vf-src2 --network gocdc-verify -p 13406:3306 \
+  -e MYSQL_ROOT_PASSWORD=123456 mysql:8.0 \
+  --server-id=201 --log-bin=binlog --binlog-format=ROW --binlog-row-image=FULL \
+  --gtid-mode=ON --enforce-gtid-consistency=ON --log-replica-updates=ON \
+  --character-set-server=utf8mb4 --collation-server=utf8mb4_0900_ai_ci \
+  --cte-max-recursion-depth=500000 >/dev/null
+
 docker run -d --name vf-dst --network gocdc-verify -p 13307:3306 \
+  -e MYSQL_ROOT_PASSWORD=123456 mysql:8.0 \
+  --character-set-server=utf8mb4 --collation-server=utf8mb4_0900_ai_ci >/dev/null
+
+# 多源组专用第二目标库（MS-10 背压隔离：源 A/B 各写各的目标实例）
+docker run -d --name vf-dst2 --network gocdc-verify -p 13407:3306 \
   -e MYSQL_ROOT_PASSWORD=123456 mysql:8.0 \
   --character-set-server=utf8mb4 --collation-server=utf8mb4_0900_ai_ci >/dev/null
 
@@ -44,7 +58,8 @@ docker ps --format '{{.Names}}\t{{.Status}}' | grep -E 'vf-|cfg-etcd|rmq'
 
 echo "════ 3) 等 MySQL 就绪"
 for i in $(seq 1 60); do
-  $SRC -e "SELECT 1" >/dev/null 2>&1 && $DST -e "SELECT 1" >/dev/null 2>&1 && { echo "mysql ready t=${i}s"; break; }
+  $SRC -e "SELECT 1" >/dev/null 2>&1 && $SRC2 -e "SELECT 1" >/dev/null 2>&1 && \
+    $DST -e "SELECT 1" >/dev/null 2>&1 && $DST2 -e "SELECT 1" >/dev/null 2>&1 && { echo "mysql ready t=${i}s"; break; }
   sleep 1
 done
 
@@ -62,7 +77,7 @@ echo "════ 6) 建库播种（wipe_data）"
 wipe_data
 
 echo "════ 7) FIFO topic 预建（等 broker 注册路由；以 topicRoute 实存为准——updateTopic 回显含 topicName 字样属假阳性）"
-for t in CDC_rmqtest_msg CDC_edu_mall_admin_users; do
+for t in CDC_rmqtest_msg CDC_edu_mall_admin_users CDC_msa_msa_orders CDC_msa_msa_evlog CDC_msb_msb_users; do
   for i in $(seq 1 30); do
     docker exec rmqbroker sh mqadmin updateTopic -n namesrv:9876 -c DefaultCluster \
       -t "$t" -a +message.type=FIFO >/dev/null 2>&1

@@ -97,3 +97,19 @@ etcd 治理（P2，leader 侧 `gcLoop` 每小时）：① stock 死标记（白�
 - 前端构建链：`cd web && npm ci && npm run build` → 产物输出 `internal/api/dist` → `go build`；`make build` 负责前端构建后再构建 Go。Docker 使用 Node 构建阶段生成静态资源，最终仍只部署 Go 单二进制。
 - 本地开发：`npm --prefix web run dev`，默认将 `/api` 代理到 `http://127.0.0.1:8060`；可用 `VITE_API_PROXY_TARGET` 覆盖。检查命令：`npm --prefix web run typecheck`、`npm --prefix web run lint`、`npm --prefix web test`。
 - 新仓库不含任何旧模板资产（React 端为全新实现）。
+
+## 7. 多源扩展（源作用域 API 与前端）
+
+2026-11 多源落地后的增量（完整设计见 `docs/prd/06`）：
+
+- **源是一等路由段**：源私有资源挂 `/api/v1/sources/{sid}/...`（status/
+  position/rules/ddl/pipeline/verify/migrate）；cluster 级（status 摘要、
+  /sources 清单、/ddl-events 全集群合并、audit、config、leader）保持原位。
+- **兼容层（弃用窗口 ≥ 2 个小版本）**：单源（default）部署旧路由等价别名、
+  顶层管线字段镜像唯一源；多源部署旧路由 400 指引新路由、顶层管线字段置空
+  以 `sources[]` 为准。前端一律走新路由——旧路由纯服务外部脚本/监控探针。
+- **DTO**：StatusData 增加 `sources: SourceStatus[]`（装配 phase + 管线状态 +
+  lag + 位点摘要）；DDLRecord/AuditEntry 增加 `source` 字段（源级操作可追溯）。
+- **前端**：源作用域是路由级状态（URL query `?source={sid}`，刷新/书签/分享
+  保持作用域）；顶栏源选择器（单源部署隐藏）；总控台聚合视图（汇总条 + 源
+  卡片栅格 + 各页按源切分）；react-query key 全部含 sid（缓存隔离）。

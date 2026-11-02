@@ -35,6 +35,7 @@ type Persister struct {
 	interval    time.Duration
 	maxFailures int
 	met         *metrics.Metrics
+	sourceID    string // 指标 source label（多源；空 = 单源/测试）
 	log         *zap.Logger
 
 	nodeID      string
@@ -49,7 +50,7 @@ type Persister struct {
 
 // NewPersister 构造。onCircuit 可 nil（仅记录）。
 func NewPersister(wm *Watermark, store PositionStore, interval time.Duration,
-	maxFailures int, nodeID string, term int64, met *metrics.Metrics,
+	maxFailures int, sourceID, nodeID string, term int64, met *metrics.Metrics,
 	log *zap.Logger, onCircuit func(error), lastEventTs func() int64) *Persister {
 	if interval <= 0 {
 		interval = 3 * time.Second
@@ -62,7 +63,7 @@ func NewPersister(wm *Watermark, store PositionStore, interval time.Duration,
 	}
 	return &Persister{
 		wm: wm, store: store, interval: interval, maxFailures: maxFailures,
-		met: met, log: log, nodeID: nodeID, term: term,
+		met: met, sourceID: sourceID, log: log, nodeID: nodeID, term: term,
 		forceCh: make(chan struct{}, 1), onCircuit: onCircuit, lastEventTs: lastEventTs,
 	}
 }
@@ -156,17 +157,17 @@ func (p *Persister) saveOnce(ctx context.Context, pos model.Position) error {
 	pos.NodeID = p.nodeID
 	if err := p.store.Save(ctx, pos); err != nil {
 		if p.met != nil {
-			p.met.PositionSaveFailures.Inc()
+			p.met.PositionSaveFailures.WithLabelValues(p.sourceID).Inc()
 		}
 		p.log.Warn("位点保存失败，将退避重试", zap.Error(err),
 			zap.String("file", pos.Name), zap.Uint32("pos", pos.Pos))
 		return err
 	}
 	if p.met != nil {
-		p.met.LastSavedSeq.Set(float64(pos.Seq))
+		p.met.LastSavedSeq.WithLabelValues(p.sourceID).Set(float64(pos.Seq))
 		if p.lastEventTs != nil {
 			if ts := p.lastEventTs(); ts > 0 {
-				p.met.PositionLagSeconds.Set(float64(time.Now().Unix() - ts))
+				p.met.PositionLagSeconds.WithLabelValues(p.sourceID).Set(float64(time.Now().Unix() - ts))
 			}
 		}
 	}

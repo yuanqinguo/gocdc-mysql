@@ -21,6 +21,7 @@ import (
 	"gocdc/internal/config"
 	"gocdc/internal/logging"
 	"gocdc/internal/model"
+	"gocdc/internal/pipeline"
 
 	"gocdc/internal/verify"
 )
@@ -43,10 +44,24 @@ func buildSourceDeps(rt *app, src *sourceState) *api.SourceDeps {
 		Markers: src.markers,
 		UseGTID: src.spec.Source.UseGTID,
 	}
-	if b := src.built.Load(); b != nil { // 已装配：静态字段直接挂（规则/门不随重装变化）
-		sd.Rules = b.comp.rules
-		sd.Gate = b.comp.ddlGate
-		sd.DDLLister = b.comp.ddlGate
+	// 数据面依赖惰性闭包：装配与 Web 启动并发，未就绪时 handler 显式 409
+	sd.Rules = func() *pipeline.CompiledRules {
+		if b := src.built.Load(); b != nil {
+			return b.comp.rules
+		}
+		return nil
+	}
+	sd.Gate = func() pipeline.DDLGate {
+		if b := src.built.Load(); b != nil {
+			return b.comp.ddlGate
+		}
+		return nil
+	}
+	sd.DDLLister = func() pipeline.DDLLister {
+		if b := src.built.Load(); b != nil {
+			return b.comp.ddlGate
+		}
+		return nil
 	}
 	sd.MasterPos = func(mctx context.Context) (model.Position, error) {
 		b, err := builtOrErr("源库连接")

@@ -22,8 +22,10 @@
 | `10_boot.sh` | A 系列：flag 契约/坏配置清单/${ENV}/binlog_format/缺列/多余列/三端点/下游不可达/打码 |
 | `20_data.sh` | B 系列：stock/全类型/主键/联合主键/大事务/verify 注入/mask + F4/F5/H1/H2/H4 |
 | `30_pos.sh` | C 系列：/position 实时/kill -9 大事务/回拨/GTID 一致/PURGED |
+| `35_ms_core.sh` | MS 系列（多源核心，2026-11-02 新增）：双源端到端一致性/并发首启全量/跨源 DDL 冻结半径/逐源 pause-resume-回拨-restock/MQ 双源 topic+envelope source/配置校验脚本分支/API 兼容层/审计 source/指标 label |
 | `40_ha.sh` | D1-D5：竞选/follower 三态/kill -9 接管/回归降级/resign（双节点共享正文） |
 | `45_ha_outage.sh` | E9 follower 审批 + I5 单产出 + ADV-07 跨会话重扫 + D6 etcd 宕机（双节点） |
+| `46_ms_ha.sh` | MS 系列（多源故障面，2026-11-02 新增）：全量中断续扫/源库宕机隔离与自愈/背压隔离（分目标库）/v1 升级+etcd 键迁移幂等/旧 leader 位点写拒绝 |
 | `50_ddl.sh` | E 系列：auto 加列/扩容/pause 冻结/skip 补齐/approve 全自动/exclude 忽略/CREATE 接入/过期放行 |
 | `55_op_pause.sh` | PP 系列（13 §3 人工暂停/恢复，2026-11-01 新增）：pause/resume confirm 门禁/受理态（paused+paused_by_op+保持 Leader）/重复拒绝/暂停期增量冻结/恢复续跑收敛/暂停期改位点（SET-POSITION 沿用 gtid_set 回归）/标志跨重启/审计留痕 |
 | `60_api.sh` | G 系列：认证/confirm 门禁/SET-POSITION/审计/verify 契约/404 + H3 |
@@ -70,20 +72,25 @@
 | 容器 | 端口(宿主) | 角色 |
 |------|-----------|------|
 | vf-src | 13306 | 源库 mysql:8.0，`ROW+FULL+GTID ON`，`cte_max_recursion_depth=500000`，repl 用户（SELECT/REPLICATION/RELOAD/BACKUP_ADMIN） |
+| vf-src2 | 13406 | 多源组第二源库（server_id=201，MS 系列双源的第二条 binlog 流） |
 | vf-dst | 13307 | 目标库 mysql:8.0 |
+| vf-dst2 | 13407 | 多源组第二目标库（MS-10 背压隔离：分目标库形态） |
 | vf-etcd | 12379 | **协调面**（位点/选举/DDL 门/审计） |
 | cfg-etcd | 12380 | **配置中心**（`/gocdc/{cluster}/config`，与协调面分离实例） |
 | rmqnamesrv | namesrv:9876（容器网内） | RocketMQ nameserver |
 | rmqbroker | 8081 | broker + proxy（gRPC 8081 映射宿主） |
 
-Docker 网络 `gocdc-verify`；FIFO topic 预建：`CDC_rmqtest_msg`、`CDC_edu_mall_admin_users`
-（`mqadmin updateTopic -a +message.type=FIFO`，v5 客户端只拉路由不建 topic）。
+Docker 网络 `gocdc-verify`；FIFO topic 预建：`CDC_rmqtest_msg`、`CDC_edu_mall_admin_users`、
+`CDC_msa_msa_orders`、`CDC_msb_msb_users`（`mqadmin updateTopic -a +message.type=FIFO`，
+v5 客户端只拉路由不建 topic）。
 
 配置中心正文（`.verify/v2/body_*.yml`，节点共享同一份，端口走 `${ENV}`）：
 - `body_main.yml`：cluster=verify，shop/types/biz2/rmqtest/cluster_e2e 五规则，
   `${METRICS_ADDR}/${WEB_ADDR}/${WEB_PASSWORD}` 区分多副本端口；
 - `body_hiprio.yml`：带点库名 `edu.mall.admin.users` → `target_database: edu.mall.merge` + RMQ 双写；
-- `body_single.yml`：`ha.enabled: false`，cluster=verify-single。
+- `body_single.yml`：`ha.enabled: false`，cluster=verify-single；
+- `body_ms.yml`：多源双源聚合形态（src-a@13306 + src-b@13406 → ms_merged@13307，v2 sources[]）；
+- `body_ms_split.yml`：多源分目标库形态（src-a→vf-dst、src-b→vf-dst2，MS-10 背压隔离用）。
 
 ## 3. 标准执行流程（全量）
 
@@ -104,8 +111,8 @@ MSYS_NO_PATHCONV=1 wsl -d Ubuntu-22.04 -- bash $REPO/.verify/v2/l1_wsl_race.sh
 # ④ L2：集成（testcontainers，分钟级；镜像默认本地已有 mysql:8.0 / etcd-3.5.16）
 MSYS_NO_PATHCONV=1 wsl -d Ubuntu-22.04 -- bash $REPO/.verify/v2/l2_integration.sh
 
-# ⑤ L3：12 组按序跑（每组内部先 wipe_all；run_group.sh 落 /tmp/v2-gNN.out）
-for g in 10_boot 20_data 30_pos 40_ha 45_ha_outage 50_ddl 55_op_pause 60_api 65_mq 70_adv 80_exceptions 90_hiprio; do
+# ⑤ L3：14 组按序跑（每组内部先 wipe_all；run_group.sh 落 /tmp/v2-gNN.out）
+for g in 10_boot 20_data 30_pos 35_ms_core 40_ha 45_ha_outage 46_ms_ha 50_ddl 55_op_pause 60_api 65_mq 70_adv 80_exceptions 90_hiprio; do
   MSYS_NO_PATHCONV=1 wsl -d Ubuntu-22.04 -- bash $REPO/.verify/v2/run_group.sh $g
 done
 ```

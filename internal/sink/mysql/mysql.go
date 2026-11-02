@@ -22,8 +22,9 @@ type Options struct {
 	MaxOpenConns    int    // 必填 ≥1（配置校验强制）
 	MaxIdleConns    int    // 0 = 5
 	ConnMaxLifetime time.Duration
-	TxChunkRows     int // 0 = 500：单语句最大行数
+	TxChunkRows     int    // 0 = 500：单语句最大行数
 	Metrics         *metrics.Metrics
+	SourceID        string // 指标 source label + envelope source 字段（多源；空 = 单源/测试）
 
 	// TargetDB 目标库解析（05 §5.1.1）：源库/表 → 目标库（可配默认库+规则覆盖，
 	// 表名不可改）。nil 或返回空 = 与源库同名。
@@ -35,6 +36,7 @@ type Sink struct {
 	db        *sql.DB
 	chunkRows int
 	metrics   *metrics.Metrics
+	sourceID  string // 指标 source label（envelope 不经 mysql sink——SQL 无消息封皮）
 	targetDB  func(schema, table string) string
 }
 
@@ -64,7 +66,7 @@ func New(opts Options) (*Sink, error) {
 	if opts.ConnMaxLifetime > 0 {
 		db.SetConnMaxLifetime(opts.ConnMaxLifetime)
 	}
-	return &Sink{db: db, chunkRows: chunk, metrics: opts.Metrics, targetDB: opts.TargetDB}, nil
+	return &Sink{db: db, chunkRows: chunk, metrics: opts.Metrics, sourceID: opts.SourceID, targetDB: opts.TargetDB}, nil
 }
 
 // resolveDB 目标库解析（规则 target_database > 全局默认 > 源库同名）。
@@ -223,7 +225,7 @@ func (s *Sink) execRun(ctx context.Context, r *run) error {
 		err = s.execPkChange(ctx, r)
 	}
 	if s.metrics != nil {
-		s.metrics.SinkBatchDuration.WithLabelValues(s.Name(), r.db, r.table).
+		s.metrics.SinkBatchDuration.WithLabelValues(s.sourceID, s.Name(), r.db, r.table).
 			Observe(time.Since(start).Seconds())
 	}
 	if err != nil {
@@ -231,9 +233,9 @@ func (s *Sink) execRun(ctx context.Context, r *run) error {
 	}
 	if s.metrics != nil {
 		// 游程段成功 = 段内事件全部投递；按事件类型分标签累计
-		s.metrics.EventsOut.WithLabelValues(r.db, r.table, "insert", s.Name()).Add(float64(r.nInsert))
-		s.metrics.EventsOut.WithLabelValues(r.db, r.table, "update", s.Name()).Add(float64(r.nUpdate))
-		s.metrics.EventsOut.WithLabelValues(r.db, r.table, "delete", s.Name()).Add(float64(r.nDelete))
+		s.metrics.EventsOut.WithLabelValues(s.sourceID, r.db, r.table, "insert", s.Name()).Add(float64(r.nInsert))
+		s.metrics.EventsOut.WithLabelValues(s.sourceID, r.db, r.table, "update", s.Name()).Add(float64(r.nUpdate))
+		s.metrics.EventsOut.WithLabelValues(s.sourceID, r.db, r.table, "delete", s.Name()).Add(float64(r.nDelete))
 	}
 	return nil
 }

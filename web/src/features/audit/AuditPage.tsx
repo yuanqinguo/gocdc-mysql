@@ -1,6 +1,7 @@
 import { Button, Table, Tooltip } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import { ReloadOutlined, UserOutlined } from '@ant-design/icons'
+import { useSourceScope } from '@/app/sourceScope'
 import { useAudit } from '@/shared/api/queries'
 import type { AuditEntry } from '@/shared/api/types'
 import { ErrorState, LoadingState } from '@/shared/components/PageState'
@@ -8,6 +9,7 @@ import { PageHeader } from '@/shared/components/PageHeader'
 import { Chip, CodeValue } from '@/shared/components/presentation'
 
 export function AuditPage() {
+  const { currentSid } = useSourceScope()
   const { data: entries = [], isPending, error, refetch } = useAudit()
   const successCount = entries.filter((entry) => entry.result === 'ok').length
   const failureCount = entries.length - successCount
@@ -25,6 +27,7 @@ export function AuditPage() {
       ),
     },
     { title: '操作内容', dataIndex: 'what', key: 'what', render: (value: string) => <Tooltip title={value}><span className="audit-action">{value}</span></Tooltip> },
+    { title: '源', dataIndex: 'source', key: 'source', width: 120, render: (value?: string) => value ? <CodeValue>{value}</CodeValue> : <span className="text-muted">—</span> },
     { title: '执行节点', dataIndex: 'node', key: 'node', width: 170, render: (value: string) => <CodeValue>{value}</CodeValue> },
     {
       title: '结果', dataIndex: 'result', key: 'result', width: 130,
@@ -38,9 +41,9 @@ export function AuditPage() {
   return <>
     <PageHeader
       code="06"
-      eyebrow="系统 / 操作审计"
+      eyebrow={currentSid ? `系统 / 操作审计 · 源 ${currentSid}` : '系统 / 操作审计'}
       title="审计日志"
-      description="最近 100 条管理操作记录，由服务端写入 etcd；失败操作同样留痕。"
+      description="最近 100 条管理操作记录，由服务端写入 etcd；失败操作同样留痕。「源」列为空表示集群级操作。"
       extra={<Button icon={<ReloadOutlined />} onClick={() => void refetch()}>刷新记录</Button>}
     />
     {error ? <ErrorState error={error} onRetry={() => void refetch()} /> : isPending ? <LoadingState /> : <>
@@ -54,7 +57,7 @@ export function AuditPage() {
       </div>
       <div className="table-shell">
         <Table<AuditEntry> className="admin-table audit-table" rowKey={(row) => `${row.at}-${row.node}-${row.what}`}
-          columns={columns} dataSource={entries} loading={isPending} scroll={{ x: 850 }}
+          columns={columns} dataSource={entries} loading={isPending} scroll={{ x: 970 }}
           pagination={{ pageSize: 15, showTotal: (total) => `共 ${total} 条审计记录`, pageSizeOptions: [15, 30, 50] }}
           locale={{ emptyText: '暂无管理操作记录' }} />
       </div>

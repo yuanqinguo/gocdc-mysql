@@ -259,7 +259,7 @@ func (a *app) runSourceFlow(leadCtx context.Context, src *sourceState, info elec
 		// 位点非法）：记录并保留 leadership 复核（DDL 审批 gate 仍需本节点
 		// 服务）；人工修复后重启进程恢复。只停该源（D5 失败隔离）。
 		log.Error("源管线退出（非停机）", zap.Error(perr))
-		a.met.PipelinePaused.WithLabelValues("*", "*", "fatal").Set(1)
+		a.met.PipelinePaused.WithLabelValues(src.sid, "*", "*", "fatal").Set(1)
 		src.setState(api.PipePaused, perr.Error())
 	} else if src.opPaused.Load() {
 		// 人工暂停（该源 /pipeline/pause 取消源 ctx）：位点终值已落盘，
@@ -317,7 +317,7 @@ func (a *app) runStock(srcCtx context.Context, src *sourceState) (model.Position
 	b := src.built.Load()
 	log := logging.L().With(zap.String("source", src.sid))
 	stockSvc := stockf.New(b.srcDB, b.comp.schemaMgr, b.comp.transformer, b.comp.router,
-		src.markers, *src.spec.Stock, b.comp.rules, a.met, a.nodeID, logging.L())
+		src.markers, *src.spec.Stock, b.comp.rules, a.met, src.sid, a.nodeID, logging.L())
 	stockSvc.SetSchemas(b.comp.ruleSchemas)
 	src.stockSvc.Store(stockSvc)
 	sres, serr := stockSvc.Run(srcCtx)

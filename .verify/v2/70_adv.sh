@@ -204,11 +204,11 @@ E13=$(pending_id); api "/ddl/$E13/approve?confirm=true" POST >/dev/null
 sleep 5
 $SRC -e "INSERT INTO shop.adv13t (v) VALUES (1),(2),(3)" 2>/dev/null
 sleep 5
-KEY=$($ETCDC get /gocdc/verify/position --print-value-only)
+KEY=$($ETCDC get /gocdc/verify/sources/default/position --print-value-only)
 kill -TERM $(pickpid node1) 2>/dev/null
 for i in $(seq 1 30); do [ -z "$(pickpid node1)" ] && break; sleep 1; done
 NEWPOS=$(echo "$KEY" | python3 -c "import sys,json;d=json.load(sys.stdin);d['pos']=max(4,d['pos']-40000);print(json.dumps(d))")
-$ETCDC put /gocdc/verify/position "$NEWPOS" >/dev/null
+$ETCDC put /gocdc/verify/sources/default/position "$NEWPOS" >/dev/null
 echo "  已回拨 40000 字节（窗口含 adv13t 的已决策 DDL+旧行像），重启…"
 stub_start node1 verify :9595 :8060
 wait_ready 9595 60 || bad "ADV-13 重启"

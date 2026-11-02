@@ -59,6 +59,7 @@ func buildComponents(ctx context.Context, cfg *config.Config, spec *config.Sourc
 		DecimalAs:      spec.Pipeline.DecimalAs,
 		ZeroDatetimeAs: spec.Pipeline.ZeroDatetimeAs,
 		Metrics:        met,
+		SourceID:       spec.ID,
 	})
 	if !spec.Targets.MySQL.Enabled {
 		return nil, nil, fmt.Errorf("targets.mysql 未启用（MySQL 直写为终态存储，当前部署须启用）")
@@ -96,7 +97,7 @@ func buildComponents(ctx context.Context, cfg *config.Config, spec *config.Sourc
 		Password: spec.Targets.MySQL.Password, Charset: spec.Targets.MySQL.Charset,
 		MaxOpenConns: spec.Targets.MySQL.MaxOpenConns, MaxIdleConns: spec.Targets.MySQL.MaxIdleConns,
 		ConnMaxLifetime: time.Duration(spec.Targets.MySQL.ConnMaxLifetimeMin) * time.Minute,
-		TxChunkRows:     spec.Targets.MySQL.TxChunkRows, Metrics: met,
+		TxChunkRows:     spec.Targets.MySQL.TxChunkRows, Metrics: met, SourceID: spec.ID,
 		TargetDB: targetDB,
 	})
 	if err != nil {
@@ -113,6 +114,7 @@ func buildComponents(ctx context.Context, cfg *config.Config, spec *config.Sourc
 			SendTimeout:     time.Duration(spec.Targets.Kafka.SendTimeoutMS) * time.Millisecond,
 			MaxMessageBytes: spec.Targets.Kafka.MaxMessageBytes,
 			SASL:            spec.Targets.Kafka.SASL, TLS: spec.Targets.Kafka.TLS,
+			SourceID:        spec.ID,
 			Metrics: met, TopicOverride: topicFor,
 		})
 		if err != nil {
@@ -136,7 +138,7 @@ func buildComponents(ctx context.Context, cfg *config.Config, spec *config.Sourc
 			SendTimeout:     time.Duration(spec.Targets.RocketMQ.SendTimeoutMS) * time.Millisecond,
 			SendConcurrency: spec.Targets.RocketMQ.SendConcurrency,
 			ACL:             spec.Targets.RocketMQ.ACL,
-			Metrics: met, Topics: topics,
+			Metrics: met, SourceID: spec.ID, Topics: topics,
 			TopicOverride: rmqTopicFor,
 		})
 		if err != nil {

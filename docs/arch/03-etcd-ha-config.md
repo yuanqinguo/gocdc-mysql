@@ -236,3 +236,20 @@ follower 侧：
 - 多 endpoint、`DialTimeout` 5s、每 op `Timeout` 3s + `MaxCallSendMsgSize` 合理值。
 - TLS（`--cacert/--cert/--key`）与用户名/密码支持，配置项齐全。
 - 读写均封装「重试 3 次 + 指数退避」，避免瞬时错误直接上抛。
+
+## 6. 多源扩展（配置 v2 与键空间 v2）
+
+单进程多源（`sources[]`，2026-11 落地）对本文的两处增量——完整设计见
+`docs/prd/`（多源 PRD 01~08），此处只记与本文契约的衔接：
+
+- **配置结构 v2**：顶层 `source/targets/rules` 下沉为 `sources[]` 数组元素；
+  顶层 `pipeline/stock` 为集群级默认模板（源级同名段逐项覆盖，0 值=未设）。
+  v1 配置加载后自动包装为 `sources:[{id:"default"}]`——下游只见 v2 结构，
+  v1 不是平行代码路径。校验新增 V1~V6（源数 1..64 / id 规则 / 逐源现行校验 /
+  跨源目标不相交 / 同实例 server_id / 合并值范围）。
+- **键空间 v2**：源私有状态下沉一层
+  `/gocdc/{cluster}/sources/{sid}/{position|stock/*|pipeline-pause|events/ddl/*}`；
+  cluster 级键（config/leader/election/nodes/events/audit）不动。写门槛锚点
+  仍是 `{prefix}/leader`——全部源的 store 实例共享同一 gate 锚，防脑裂论证
+  逐字复用（§4.2）。存量键在启动装配期一次性 CAS 迁移（幂等 + 完成标记
+  `{prefix}/migration/sources/v1tov2` + 审计）；回滚三步见 RUNBOOK §9.3。

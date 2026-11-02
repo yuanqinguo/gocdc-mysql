@@ -26,6 +26,7 @@ type Options struct {
 	SendConcurrency int // 组间并发发送上限；<=0 = 默认 32（组内仍严格串行，05 §4）
 	ACL             config.ACLOptions
 	Metrics         *metrics.Metrics
+	SourceID        string // 指标 source label + envelope source 字段（多源；空 = 单源/测试）
 	Topics          []string // 预声明 topic 集合（装配层按规则展开；实战坑必须 Start 前给全）
 	TopicOverride   func(db, table string) string
 }
@@ -174,7 +175,7 @@ func (s *Sink) Send(ctx context.Context, batch []*model.Event) error {
 	units := make([]sendUnit, 0, len(batch))
 	for _, ev := range batch {
 		topic := sink.TopicName(s.opts.TopicPrefix, s.topicOverride(ev), ev.Database, ev.Table)
-		msg, err := sink.BuildMessage(ev, s.opts.OrderBy)
+		msg, err := sink.BuildMessage(ev, s.opts.OrderBy, s.opts.SourceID)
 		if err != nil {
 			return sink.Permanent(err)
 		}
@@ -262,8 +263,8 @@ func (s *Sink) sendOne(ctx context.Context, u *sendUnit) error {
 		return fmt.Errorf("rocketmq sink: %s 无发送回执（结果未知，将重发）", u.ev.EventID)
 	}
 	if s.metrics != nil {
-		s.metrics.EventsOut.WithLabelValues(u.ev.Database, u.ev.Table, string(u.ev.Type), s.Name()).Inc()
-		s.metrics.BytesOut.WithLabelValues(s.Name()).Add(float64(u.size))
+		s.metrics.EventsOut.WithLabelValues(s.opts.SourceID, u.ev.Database, u.ev.Table, string(u.ev.Type), s.Name()).Inc()
+		s.metrics.BytesOut.WithLabelValues(s.opts.SourceID, s.Name()).Add(float64(u.size))
 	}
 	return nil
 }

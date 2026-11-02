@@ -8,6 +8,8 @@ import type {
   MigrateGTIDResult,
   PositionData,
   SetPositionRequest,
+  SourceStatus,
+  SourceSummary,
   StatusData,
   VerifyResult,
 } from './types'
@@ -88,16 +90,13 @@ export class ApiClient {
     return this.request<StatusData>('/status', { signal })
   }
 
-  async getEffectiveRules(signal?: AbortSignal): Promise<EffectiveRule[]> {
-    const data = await this.request<EffectiveRule[] | null>('/rules/effective', { signal })
+  async getSources(signal?: AbortSignal): Promise<SourceSummary[]> {
+    const data = await this.request<SourceSummary[] | null>('/sources', { signal })
     return Array.isArray(data) ? data : []
   }
 
-  getPosition(signal?: AbortSignal) {
-    return this.request<PositionData | null>('/position', { signal })
-  }
-
-  async getDDLEvents(signal?: AbortSignal): Promise<DDLRecord[]> {
+  /** 全集群 pending DDL 合并（记录带 source 字段，聚合视图/角标用）。 */
+  async getDDLEventsAll(signal?: AbortSignal): Promise<DDLRecord[]> {
     const data = await this.request<DDLRecord[] | null>('/ddl-events', { signal })
     return Array.isArray(data) ? data : []
   }
@@ -120,57 +119,81 @@ export class ApiClient {
     return (await response.json()) as unknown
   }
 
-  restock(schema: string, table: string) {
-    return this.request<void>(`/rules/by-schema/${encodeURIComponent(schema)}/${encodeURIComponent(table)}/restock?confirm=true`, {
+  resign() {
+    return this.request<void>('/leader/resign?confirm=true', { method: 'POST' })
+  }
+
+  // ── 源作用域（sid 必经 encodeURIComponent；旧单源路由只服务外部脚本）──
+
+  private sourcePath(sid: string, suffix: string) {
+    return `/sources/${encodeURIComponent(sid)}${suffix}`
+  }
+
+  getSourceStatus(sid: string, signal?: AbortSignal) {
+    return this.request<SourceStatus>(this.sourcePath(sid, '/status'), { signal })
+  }
+
+  getPositionOf(sid: string, signal?: AbortSignal) {
+    return this.request<PositionData | null>(this.sourcePath(sid, '/position'), { signal })
+  }
+
+  async getEffectiveRulesOf(sid: string, signal?: AbortSignal): Promise<EffectiveRule[]> {
+    const data = await this.request<EffectiveRule[] | null>(this.sourcePath(sid, '/rules/effective'), { signal })
+    return Array.isArray(data) ? data : []
+  }
+
+  async getDDLEventsOf(sid: string, signal?: AbortSignal): Promise<DDLRecord[]> {
+    const data = await this.request<DDLRecord[] | null>(this.sourcePath(sid, '/ddl-events'), { signal })
+    return Array.isArray(data) ? data : []
+  }
+
+  restockOf(sid: string, schema: string, table: string) {
+    return this.request<void>(this.sourcePath(sid, `/rules/by-schema/${encodeURIComponent(schema)}/${encodeURIComponent(table)}/restock?confirm=true`), {
       method: 'POST',
     })
   }
 
-  approveDDL(id: string) {
-    return this.request<void>(`/ddl/${encodeURIComponent(id)}/approve?confirm=true`, { method: 'POST' })
+  approveDDLOf(sid: string, id: string) {
+    return this.request<void>(this.sourcePath(sid, `/ddl/${encodeURIComponent(id)}/approve?confirm=true`), { method: 'POST' })
   }
 
-  skipDDL(id: string) {
-    return this.request<void>(`/ddl/${encodeURIComponent(id)}/skip?confirm=true`, { method: 'POST' })
+  skipDDLOf(sid: string, id: string) {
+    return this.request<void>(this.sourcePath(sid, `/ddl/${encodeURIComponent(id)}/skip?confirm=true`), { method: 'POST' })
   }
 
-  verify(database: string, table: string, pk: string, sample: number) {
-    return this.request<VerifyResult>('/verify?confirm=true', {
+  verifyOf(sid: string, database: string, table: string, pk: string, sample: number) {
+    return this.request<VerifyResult>(this.sourcePath(sid, '/verify?confirm=true'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ database, table, pk, sample }),
     })
   }
 
-  resign() {
-    return this.request<void>('/leader/resign?confirm=true', { method: 'POST' })
+  /** 人工暂停该源管线：优雅停管线（位点落盘）；etcd 持久标志跨重启。 */
+  pausePipelineOf(sid: string) {
+    return this.request<void>(this.sourcePath(sid, '/pipeline/pause?confirm=true'), { method: 'POST' })
   }
 
-  /** 人工暂停管线：优雅停管线（位点落盘）保持 Leader；etcd 持久标志跨重启。 */
-  pausePipeline() {
-    return this.request<void>('/pipeline/pause?confirm=true', { method: 'POST' })
+  /** 恢复该源人工暂停的管线：删标志并从 etcd 位点重启。 */
+  resumePipelineOf(sid: string) {
+    return this.request<void>(this.sourcePath(sid, '/pipeline/resume?confirm=true'), { method: 'POST' })
   }
 
-  /** 恢复人工暂停的管线：删标志并从 etcd 位点重启（支持暂停期间改位点）。 */
-  resumePipeline() {
-    return this.request<void>('/pipeline/resume?confirm=true', { method: 'POST' })
-  }
-
-  setPosition(body: SetPositionRequest) {
-    return this.request<void>('/position', {
+  setPositionOf(sid: string, body: SetPositionRequest) {
+    return this.request<void>(this.sourcePath(sid, '/position'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     })
   }
 
-  /** file:pos 存量位点 → GTID 基线（use_gtid 切换后管线暂停的恢复路径）。 */
-  migrateGTID() {
-    return this.request<MigrateGTIDResult>('/position/migrate-gtid?confirm=true', { method: 'POST' })
+  /** 该源 file:pos 存量位点 → GTID 基线（use_gtid 切换后的恢复路径）。 */
+  migrateGTIDOf(sid: string) {
+    return this.request<MigrateGTIDResult>(this.sourcePath(sid, '/position/migrate-gtid?confirm=true'), { method: 'POST' })
   }
 
-  /** GTID → file:pos 反向迁移（位点置最老 binlog 头，接受重放）。 */
-  migrateFilePos() {
-    return this.request<MigrateFilePosResult>('/position/migrate-filepos?confirm=true', { method: 'POST' })
+  /** 该源 GTID → file:pos 反向迁移（位点置最老 binlog 头，接受重放）。 */
+  migrateFilePosOf(sid: string) {
+    return this.request<MigrateFilePosResult>(this.sourcePath(sid, '/position/migrate-filepos?confirm=true'), { method: 'POST' })
   }
 }

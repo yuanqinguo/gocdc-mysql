@@ -3687,3 +3687,295 @@ a {
     font-size: 25px;
   }
 }
+
+/* ── 多源：顶栏源选择器 / 聚合视图 ───────────────────────────────────── */
+
+.source-select.ant-select {
+  min-width: 128px;
+}
+
+.source-select .ant-select-selector {
+  border-radius: 4px !important;
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+/* 聚合视图汇总条 */
+.source-summary-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px 20px;
+  margin-bottom: 16px;
+  padding: 14px 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: rgba(26, 34, 44, 0.7);
+  animation: rise 0.45s 0.02s var(--ease) both;
+}
+
+.source-summary-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 18px;
+  color: var(--text-4);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+}
+
+.source-summary-meta > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.source-summary-meta b {
+  color: var(--text-2);
+  font-weight: 500;
+}
+
+.source-summary-meta .anticon {
+  color: var(--signal-soft);
+}
+
+/* 源卡片栅格（两列响应式） */
+.source-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  animation: rise 0.5s 0.06s var(--ease) both;
+}
+
+.source-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.source-card.is-failed {
+  border-color: rgba(255, 92, 92, 0.45);
+  box-shadow: inset 0 0 30px rgba(255, 92, 92, 0.05);
+}
+
+.source-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px 12px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.source-card-title {
+  min-width: 0;
+}
+
+.source-card-title b {
+  display: block;
+  overflow: hidden;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-card-title small {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-4);
+  font-family: var(--font-mono);
+  font-size: 9px;
+}
+
+.source-card-head .chip-row {
+  flex-shrink: 0;
+  justify-content: flex-end;
+  max-width: 55%;
+}
+
+.source-card-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 18px;
+}
+
+.source-route {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.source-route-node {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.source-route-node small {
+  color: var(--text-4);
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 0.12em;
+}
+
+.source-route-node b {
+  overflow: hidden;
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-route-arrow {
+  flex-shrink: 0;
+  color: var(--signal);
+  font-size: 10px;
+}
+
+.source-card-error {
+  margin: 0;
+  padding: 9px 11px;
+  border: 1px solid rgba(255, 92, 92, 0.22);
+  border-radius: 4px;
+  background: rgba(255, 92, 92, 0.05);
+  color: var(--danger);
+  font-size: 10px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.source-card-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+}
+
+.source-card-facts > span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.source-card-facts small {
+  color: var(--text-4);
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 0.12em;
+}
+
+.source-card-facts code {
+  overflow: hidden;
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.source-card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 18px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.source-card-ddl {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--warn);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.source-card-ddl:hover {
+  color: #ffd670;
+}
+
+.source-card-detail {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+  color: var(--signal-soft);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.source-card-detail:hover {
+  color: #ffb37a;
+}
+
+/* 多源规则页折叠面板头 */
+.source-collapse .ant-collapse-header {
+  font-family: var(--font-mono);
+}
+
+.source-collapse .ant-collapse-content-box {
+  padding: 12px !important;
+}
+
+/* 配置中心规则视图的源分组头 */
+.config-source-group {
+  margin-bottom: 14px;
+}
+
+.config-source-group:last-child {
+  margin-bottom: 0;
+}
+
+.config-source-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+/* 全部位点摘要列表 */
+.position-summary-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.position-summary-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 18px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.position-summary-row:last-child {
+  border-bottom: 0;
+}
+
+.position-summary-row > .entity {
+  flex: 1;
+  min-width: 220px;
+}
+
+.position-summary-row .code-value {
+  font-size: 10px;
+}
+
+@media (max-width: 1100px) {
+  .source-grid {
+    grid-template-columns: 1fr;
+  }
+}

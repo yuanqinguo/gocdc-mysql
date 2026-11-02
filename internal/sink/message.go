@@ -31,8 +31,10 @@ const (
 // BuildMessage 把事件编码为 MQ 消息（05 §2.1 消息格式；MQ sink 共用）。
 //
 // 消息自描述可追溯：event_id+position 可去重可追溯、before/after 明确命名、
-// columns 自描述、phase 区分全量增量。
-func BuildMessage(ev *model.Event, orderBy string) (*Message, error) {
+// columns 自描述、phase 区分全量增量。sourceID 非空时写入 envelope source
+// 字段（多源契约 v2，PRD D7：消费端按 (topic, event_id) 或 (source, event_id)
+// 去重均成立——D6 保证 topic 不跨源相交）。
+func BuildMessage(ev *model.Event, orderBy, sourceID string) (*Message, error) {
 	envelope := map[string]any{
 		"event_id": ev.EventID,
 		"type":     string(ev.Type),
@@ -50,6 +52,9 @@ func BuildMessage(ev *model.Event, orderBy string) (*Message, error) {
 		"pk":             encodeMap(ev.Pk),
 		"schema_version": ev.SchemaVersion,
 		"columns":        ev.Columns, // ColumnMeta 带 json tag，直接序列化
+	}
+	if sourceID != "" {
+		envelope["source"] = sourceID
 	}
 	if ev.SQL != "" {
 		envelope["sql"] = ev.SQL

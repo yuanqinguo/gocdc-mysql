@@ -35,7 +35,7 @@ func e2eEvent() *model.Event {
 }
 
 func TestBuildMessage_Golden(t *testing.T) {
-	m, err := BuildMessage(e2eEvent(), OrderByRow)
+	m, err := BuildMessage(e2eEvent(), OrderByRow, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,15 +103,15 @@ func TestBuildMessage_Golden(t *testing.T) {
 
 func TestBuildMessage_Keys(t *testing.T) {
 	ev := e2eEvent()
-	if k, _ := BuildMessage(ev, OrderByRow); k.Key != "db1.users.7" {
+	if k, _ := BuildMessage(ev, OrderByRow, ""); k.Key != "db1.users.7" {
 		t.Fatalf("row key: %s", k.Key)
 	}
 	// 联合主键按列名字典序拼接
 	ev.Pk = map[string]any{"tenant": "a", "id": int64(7)}
-	if k, _ := BuildMessage(ev, OrderByRow); k.Key != "db1.users.7.a" {
+	if k, _ := BuildMessage(ev, OrderByRow, ""); k.Key != "db1.users.7.a" {
 		t.Fatalf("复合主键 key: %s", k.Key)
 	}
-	if k, _ := BuildMessage(ev, OrderByTable); k.Key != "db1.users" {
+	if k, _ := BuildMessage(ev, OrderByTable, ""); k.Key != "db1.users" {
 		t.Fatalf("table key: %s", k.Key)
 	}
 }

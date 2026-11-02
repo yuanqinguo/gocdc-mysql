@@ -1,4 +1,6 @@
 # gocdc 告警规则（11 文档 §4；PrometheusRule 或 rule_files 挂载）
+# 多源（PRD 07 §2）：源私有指标已 label 化（source 维度）——不带 source 的
+# 选择器自动聚合全部源，现有面板/告警查询兼容；新增按源告警两条。
 groups:
   - name: gocdc-critical
     rules:
@@ -8,20 +10,20 @@ groups:
         labels: {severity: critical}
         annotations: {summary: "gocdc 无 leader（选举失败/全部节点失联）"}
       - alert: GocdcPipelinePaused
-        expr: sum(gocdc_pipeline_paused) > 0
+        expr: sum by (source) (gocdc_pipeline_paused) > 0
         for: 5m
         labels: {severity: critical}
-        annotations: {summary: "管线暂停（DDL/转换失败/sink 熔断），位点冻结等待人工"}
+        annotations: {summary: "源 {{ $labels.source }} 管线暂停（DDL/转换失败/sink 熔断），位点冻结等待人工"}
       - alert: GocdcEventLagHigh
         expr: gocdc_event_lag_seconds > 300
         for: 5m
         labels: {severity: warning}
-        annotations: {summary: "事件延迟 > 5 分钟"}
+        annotations: {summary: "源 {{ $labels.source }} 事件延迟 > 5 分钟"}
       - alert: GocdcPositionSaveFailing
         expr: increase(gocdc_position_save_failures_total[10m]) > 0
         for: 0m
         labels: {severity: warning}
-        annotations: {summary: "位点保存失败（etcd 抖动/门槛拒绝）"}
+        annotations: {summary: "源 {{ $labels.source }} 位点保存失败（etcd 抖动/门槛拒绝）"}
       - alert: GocdcDeadLetterUsed
         expr: increase(gocdc_deadletter_total[10m]) > 0
         for: 0m
@@ -32,3 +34,13 @@ groups:
         for: 0m
         labels: {severity: warning}
         annotations: {summary: "值转换异常（enum 越界/字符集/类型不支持）"}
+      - alert: GocdcSourceDown
+        expr: max_over_time(gocdc_source_up[1m]) == 0
+        for: 1m
+        labels: {severity: critical}
+        annotations: {summary: "源 {{ $labels.source }} 不可用（装配失败退避重试中，其余源不受影响）"}
+      - alert: GocdcSourcesFailed
+        expr: gocdc_sources{state="failed"} > 0
+        for: 0m
+        labels: {severity: warning}
+        annotations: {summary: "存在装配失败的源（gocdc_source_up=0 定位具体源）"}

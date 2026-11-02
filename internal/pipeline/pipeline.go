@@ -152,7 +152,7 @@ func (p *Pipeline) Run(ctx context.Context, start model.Position, resume source.
 	// ── 位点持久化：熔断回调触发全管线中止（03 §5.2）──
 	persistCtx, stopPersist := context.WithCancel(context.WithoutCancel(ctx))
 	persister := NewPersister(wm, p.opts.Store, p.opts.SaveInterval, p.opts.MaxSaveFails,
-		p.opts.NodeID, p.opts.Term, p.opts.Metrics, p.log, abort, p.lastEventTs.Load)
+		p.opts.SourceID, p.opts.NodeID, p.opts.Term, p.opts.Metrics, p.log, abort, p.lastEventTs.Load)
 	var persistWG sync.WaitGroup
 	persistWG.Add(1)
 	go func() {
@@ -270,21 +270,21 @@ func (p *Pipeline) sampleLoop(ctx context.Context, queues []chan *EventUnit, wm 
 			for i := range queues {
 				d := len(queues[i])
 				depths += d
-				p.opts.Metrics.WorkerQueueDepth.WithLabelValues(fmt.Sprint(i)).Set(float64(d))
+				p.opts.Metrics.WorkerQueueDepth.WithLabelValues(p.opts.SourceID, fmt.Sprint(i)).Set(float64(d))
 			}
 			base, _ := wm.Current()
-			p.opts.Metrics.WatermarkSeq.Set(float64(base))
+			p.opts.Metrics.WatermarkSeq.WithLabelValues(p.opts.SourceID).Set(float64(base))
 			// 洞检测：有 pending（乱序未连续）且全部队列已空且持续 > 2 个周期
 			// → worker 卡死前兆，告警日志
 			// lag 三口径（11 §1.2）：事件延迟 = now − 最近事件 binlog 时间戳；
 			// 位点滞后由 Persister 在 save 时写入（复用 lastEventTs）
 			if ts := p.lastEventTs.Load(); ts > 0 {
-				p.opts.Metrics.EventLagSeconds.Set(float64(time.Now().Unix() - ts))
+				p.opts.Metrics.EventLagSeconds.WithLabelValues(p.opts.SourceID).Set(float64(time.Now().Unix() - ts))
 			}
 			if p.opts.MasterPosFn != nil {
 				if mp, err := p.opts.MasterPosFn(ctx); err == nil {
 					_, cur := wm.Current()
-					p.opts.Metrics.SetMasterPositionLagBytes(computeLagBytes(cur, mp, p.opts.Flavor))
+					p.opts.Metrics.SetMasterPositionLagBytes(p.opts.SourceID, computeLagBytes(cur, mp, p.opts.Flavor))
 				}
 			}
 			if holes := wm.Pending(); holes > 0 && depths == 0 {

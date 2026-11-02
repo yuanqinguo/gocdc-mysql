@@ -30,6 +30,7 @@ type Service struct {
 	cfg        config.Stock
 	rules      *pipeline.CompiledRules
 	met        *metrics.Metrics
+	sourceID   string // 指标 source label（多源；空 = 单源/测试）
 	log        *zap.Logger
 	nodeID     string
 	throttleMS int
@@ -39,13 +40,13 @@ type Service struct {
 // New 构造。
 func New(db *sql.DB, sm *schema.Manager, tr *transform.Transformer, sn sink.Sink,
 	markers *MarkerStore, cfg config.Stock, rules *pipeline.CompiledRules,
-	met *metrics.Metrics, nodeID string, log *zap.Logger) *Service {
+	met *metrics.Metrics, sourceID, nodeID string, log *zap.Logger) *Service {
 	if log == nil {
 		log = zap.NewNop()
 	}
 	return &Service{
 		db: db, schemaMgr: sm, transform: tr, sn: sn, markers: markers,
-		cfg: cfg, rules: rules, met: met, nodeID: nodeID,
+		cfg: cfg, rules: rules, met: met, sourceID: sourceID, nodeID: nodeID,
 		log: log, throttleMS: cfg.ThrottleMS,
 	}
 }
@@ -205,13 +206,13 @@ func (s *Service) scanOne(ctx context.Context, slot int, sess *Session, sc *Scan
 			}
 		}
 		if s.met != nil {
-			s.met.StockRowsTotal.WithLabelValues(db, table).Add(float64(mk.RowsDone - lastReported))
+			s.met.StockRowsTotal.WithLabelValues(s.sourceID, db, table).Add(float64(mk.RowsDone - lastReported))
 		}
 		lastReported = mk.RowsDone
 		return s.markers.Put(ctx, db, table, mk)
 	})
 	if s.met != nil && err == nil {
-		s.met.StockProgressRatio.WithLabelValues(db, table).Set(1)
+		s.met.StockProgressRatio.WithLabelValues(s.sourceID, db, table).Set(1)
 	}
 	if err != nil {
 		if errors.Is(err, context.Canceled) {

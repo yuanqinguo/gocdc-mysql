@@ -425,3 +425,44 @@ curl http://127.0.0.1:9595/metrics                            # Prometheus 指�
 | 位点回拨后数据没重放 | 运行中回拨会被停机水位覆盖——**停机 → 回拨 → 启动**（RUNBOOK §1） |
 | etcd 挂了会怎样 | TTL 内全节点停管线（安全态，不丢数据）；恢复后自动重选续传 |
 | leader 挂了会怎样 | follower ≤ TTL+10s 接管；窗口期数据零丢失（binlog 重放+幂等 upsert） |
+
+## 11. 多源部署（配置 v2 sources[]，2026-11）
+
+单进程一个 cluster 承载最多 64 条 MySQL 同步源：每源独立的源连接、规则、
+下游、位点、全量标记、DDL 审批、暂停标志；一个 Web 控制台、一个指标端口、
+一次选主覆盖全部源。完整设计见 `docs/prd/`。
+
+**升级零操作**：现行 v1 配置（顶层 source/targets/rules）加载后自动包装为
+`sources: [{id: "default"}]`，etcd 存量键启动时自动迁移到
+`sources/default/` 子树（幂等，日志 `etcd_keys_migrated`）。
+
+**多源写法**（完整字段与校验规则见 `internal/config/README.md §4.5` 与
+`deploy/config.multi-source.example.yml`）：
+
+```yaml
+pipeline: {workers: 4, worker_queue_size: 8192, batch_size: 500}   # 集群默认
+sources:
+  - id: order-center          # ^[a-z][a-z0-9_-]{1,31}$，cluster 内唯一
+    source: {addr: "10.0.0.11:3306", ...}     # 原 source 块原样下沉
+    targets: {mysql: {..., target_database: mall_merged}, ...}
+    rules: [...]
+    pipeline: {workers: 8}    # 可选：只覆盖 workers，其余继承集群默认
+  - id: user-center
+    source: {addr: "10.0.0.12:3306", ...}
+    ...
+```
+
+**三条硬约束**（启动校验期拦死）：
+
+1. 跨源目标不相交：全部源的 effective `(目标实例, 目标库, 表)` 三元组与
+   `(brokers, topic)` / `(name_servers, topic)` 全局唯一——两源写同一目标表/
+   topic = 数据互覆，属配置错误。
+2. 同一源实例被多个源订阅时 `server_id` 必须显式互异（否则 binlog 订阅互踢）；
+   缺省按 `node_id:sid` 派生，同进程天然互异。
+3. 源数 1..64（容量规划口径：目标连接=Σ各源 max_open_conns，
+   GOMEMLIMIT ≈ N×150MB+100MB，详见 RUNBOOK §9.5）。
+
+**失败隔离**：某源源库宕机/启动检查不过 → 该源 `failed` + 30s 起指数退避
+重试（上限 5min），其余源不受影响；运行期致命错误仍为该源 `paused` 等
+人工。运维操作（位点回拨/restock/DDL 审批/暂停恢复）按源走
+`/api/v1/sources/{sid}/...`（单源部署旧路由等价可用）。

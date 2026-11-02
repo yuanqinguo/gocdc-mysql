@@ -1,0 +1,88 @@
+# 多源演示拓扑（多源 PRD 07 §4.2）：
+#
+#   etcd ── mysql-src-a（订单源 msa）──┐
+#        ├─ mysql-src-b（用户源 msb）──┼─► gocdc（单进程 2 源，聚合写入）──► mysql-dst
+#        └─ mysql-dst（聚合目标）
+#   profile cluster：gocdc-2 热备（选主覆盖全部源）
+#
+# 演示命令（详见 deploy/README.md）：
+#   docker compose -f docker-compose.multi-source.yml up -d
+#   # ① 双源写入 → 聚合目标出现两路数据
+#   docker exec mysql-src-a mysql -uroot -p123456 msa \
+#     -e "INSERT INTO orders (val,amt) VALUES ('demo-a',9.99)"
+#   docker exec mysql-src-b mysql -uroot -p123456 msb \
+#     -e "INSERT INTO users (name,phone) VALUES ('demo-b','13900000001')"
+#   docker exec mysql-dst mysql -uroot -p123456 ms_merged \
+#     -e "SELECT 'orders' t, COUNT(*) FROM orders UNION ALL SELECT 'users', COUNT(*) FROM users"
+#   # ② 杀 leader（profile cluster 形态）→ 两个源一起接管续传
+#   # ③ 停 mysql-src-b → 仅 src-b failed 重试，src-a 不受影响（gocdc_source_up=0 定位）
+
+name: gocdc-multi-source
+
+services:
+  etcd:
+    image: docker.cnb.cool/qingflyfei/edu.image.base:etcd-3.5.16
+    command: etcd --name=etcd --advertise-client-urls=http://etcd:2379 --listen-client-urls=http://0.0.0.0:2379
+    ports: ["12379:2379"]
+
+  mysql-src-a:
+    image: mysql:8.0
+    environment: { MYSQL_ROOT_PASSWORD: "123456" }
+    command:
+      - --server-id=101
+      - --log-bin=binlog
+      - --binlog-format=ROW
+      - --binlog-row-image=FULL
+      - --gtid-mode=ON
+      - --enforce-gtid-consistency=ON
+      - --log-replica-updates=ON
+    ports: ["13306:3306"]
+    volumes:
+      - ./multi-source/init-src-a.sql:/docker-entrypoint-initdb.d/init.sql:ro
+
+  mysql-src-b:
+    image: mysql:8.0
+    environment: { MYSQL_ROOT_PASSWORD: "123456" }
+    command:
+      - --server-id=201
+      - --log-bin=binlog
+      - --binlog-format=ROW
+      - --binlog-row-image=FULL
+      - --gtid-mode=ON
+      - --enforce-gtid-consistency=ON
+      - --log-replica-updates=ON
+    ports: ["13406:3306"]
+    volumes:
+      - ./multi-source/init-src-b.sql:/docker-entrypoint-initdb.d/init.sql:ro
+
+  mysql-dst:
+    image: mysql:8.0
+    environment: { MYSQL_ROOT_PASSWORD: "123456" }
+    ports: ["13307:3306"]
+    volumes:
+      - ./multi-source/init-dst.sql:/docker-entrypoint-initdb.d/init.sql:ro
+
+  gocdc:
+    build: { context: .., dockerfile: deploy/Dockerfile }
+    image: ${GOCDC_IMAGE:-gocdc:demo}
+    depends_on: [etcd, mysql-src-a, mysql-src-b, mysql-dst]
+    environment:
+      GOCDC_WEB_PASSWORD: demo123
+    # 演示配置用 -config-file 挂载（与 docker-compose.yml 同形态；生产改写 etcd）
+    command: ["-cluster", "ms-demo", "-etcd", "etcd:2379", "-config-file", "/data/wwwRoot/config.yml"]
+    volumes:
+      - ./config.multi-source.example.yml:/data/wwwRoot/config.yml:ro
+    ports: ["8060:8060", "9595:9595"]
+
+  # 热备形态（选主演示：杀 gocdc → gocdc-2 接管全部源）
+  gocdc-2:
+    profiles: [cluster]
+    image: ${GOCDC_IMAGE:-gocdc:demo}
+    build: { context: .., dockerfile: deploy/Dockerfile }
+    depends_on: [etcd, mysql-src-a, mysql-src-b, mysql-dst]
+    environment:
+      GOCDC_WEB_PASSWORD: demo123
+    command: ["-cluster", "ms-demo", "-etcd", "etcd:2379", "-config-file", "/data/wwwRoot/config.yml"]
+    volumes:
+      - ./config.multi-source.example.yml:/data/wwwRoot/config.yml:ro
+    ports: ["8061:8060", "9596:9595"]

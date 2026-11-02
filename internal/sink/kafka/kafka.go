@@ -31,6 +31,7 @@ type Options struct {
 	SASL            config.SASLOptions
 	TLS             config.TLSOptions
 	Metrics         *metrics.Metrics
+	SourceID        string // 指标 source label（多源；空 = 单源/测试）
 
 	// TopicOverride(db, table) → 规则级 topic 覆盖（rules[].sinks.kafka.topic；
 	// 空 = prefix + "{db}_{table}"，与 RocketMQ 统一规范）。
@@ -113,13 +114,13 @@ func (s *Sink) Send(ctx context.Context, batch []*model.Event) error {
 	records := make([]*kgo.Record, 0, len(batch))
 	for _, ev := range batch {
 		topic := sink.TopicName(s.opts.TopicPrefix, s.topicOverride(ev), ev.Database, ev.Table)
-		msg, err := sink.BuildMessage(ev, s.opts.OrderBy)
+		msg, err := sink.BuildMessage(ev, s.opts.OrderBy, s.opts.SourceID)
 		if err != nil {
 			return sink.Permanent(err)
 		}
 		if len(msg.Value) > s.opts.MaxMessageBytes {
 			if s.metrics != nil {
-				s.metrics.MessageOversize.WithLabelValues(ev.Database, ev.Table, s.Name()).Inc()
+				s.metrics.MessageOversize.WithLabelValues(s.opts.SourceID, ev.Database, ev.Table, s.Name()).Inc()
 			}
 			return sink.Permanent(&sink.OversizeError{Topic: topic, Size: len(msg.Value), Limit: s.opts.MaxMessageBytes})
 		}
@@ -132,8 +133,8 @@ func (s *Sink) Send(ctx context.Context, batch []*model.Event) error {
 	}
 	if s.metrics != nil {
 		for i, ev := range batch {
-			s.metrics.EventsOut.WithLabelValues(ev.Database, ev.Table, string(ev.Type), s.Name()).Inc()
-			s.metrics.BytesOut.WithLabelValues(s.Name()).Add(float64(len(records[i].Value)))
+			s.metrics.EventsOut.WithLabelValues(s.opts.SourceID, ev.Database, ev.Table, string(ev.Type), s.Name()).Inc()
+			s.metrics.BytesOut.WithLabelValues(s.opts.SourceID, s.Name()).Add(float64(len(records[i].Value)))
 		}
 	}
 	return nil

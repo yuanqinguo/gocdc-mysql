@@ -119,27 +119,59 @@ echo "  错误行数=$ERRN（期待 ≥15，不短路）"
   && grep -q "属于别的集群\|cluster" /tmp/v2/a2/out.log \
   && ok "A2 完整错误清单 exit=1（含 cluster 裁决）" || bad "A2 错误行数=$ERRN"
 
-grp "A7 下游不可达拒启（正文 targets.mysql.addr 指向死端口）"
+grp "A7 下游不可达：源级 failed + 退避重试（多源 D5：不再进程退出，严格改进）"
 sed 's|addr: 127.0.0.1:13307|addr: 127.0.0.1:13399|' "$V2/body_main.yml" > /tmp/v2/body-a7.yml
-cc_run a7 verify /tmp/v2/body-a7.yml
-# 死端口症状随网络环境二选一：正常 RST 网络=connection refused；WSL mirrored
-# 网络丢 SYN 不回 RST=i/o timeout——两者同为「拨号失败」，断言取并集
-grep -q "下游目标不可达" /tmp/v2/a7/out.log && grep -qiE "connection refused|i/o timeout" /tmp/v2/a7/out.log \
-  && [ "$(cat /tmp/v2/a7/exit.log)" = "1" ] && ok "A7 fatal 下游不可达拒启（refused/timeout）" || bad "A7"
+ccput verify /tmp/v2/body-a7.yml
+stub_start a7 verify :9595 :8060
+if wait_ready 9595 40; then
+  # 源装配失败被隔离：轮询等失败落地（ping 超时 5s+ 在装配期），进程保持存活
+  wait_log /tmp/v2/a7.log "源装配失败" 30
+  wait_phase 8060 default failed 10
+  PH=$(curl -s --noproxy '*' -u admin:demo123 localhost:8060/api/v1/status | jget 'd["sources"][0]["phase"]' | tr -d '[:space:]')
+  if grep -q "下游目标不可达" /tmp/v2/a7.log && grep -qiE "connection refused|i/o timeout" /tmp/v2/a7.log \
+    && [ "$PH" = "failed" ]; then
+    ok "A7 源 failed(startup)+进程存活（失败隔离，退避重试）"
+  else
+    bad "A7 phase=$PH $(grep -m1 源装配失败 /tmp/v2/a7.log | head -c 120)"
+  fi
+else
+  bad "A7 进程未存活（healthz 超时）"
+fi
+killall_gocdc
 
-grp "A4 binlog_format=MIXED 拒启（动态 SET 后验证）"
+grp "A4 binlog_format=MIXED：源级 failed + 退避重试（多源 D5 语义）"
 $SRC -e "SET GLOBAL binlog_format='MIXED'" 2>/dev/null
-cc_run a4 verify "$V2/body_main.yml"
-grep -qE 'binlog_format|ROW' /tmp/v2/a4/out.log && [ "$(cat /tmp/v2/a4/exit.log)" = "1" ] \
-  && ok "A4 非 ROW 拒启 exit=1" || bad "A4"
+ccput verify "$V2/body_main.yml"
+stub_start a4 verify :9595 :8060
+if wait_ready 9595 40; then
+  wait_log /tmp/v2/a4.log "源装配失败" 30
+  if grep -qE 'binlog_format|ROW' /tmp/v2/a4.log && grep -q "源装配失败" /tmp/v2/a4.log; then
+    ok "A4 非 ROW 源 failed + 退避重试（进程存活）"
+  else
+    bad "A4 $(grep -m1 源装配失败 /tmp/v2/a4.log | head -c 150)"
+  fi
+else
+  bad "A4 进程未存活"
+fi
+killall_gocdc
 $SRC -e "SET GLOBAL binlog_format='ROW'" 2>/dev/null
 echo "  已恢复 ROW: $($SRC -N -e 'SELECT @@global.binlog_format' 2>/dev/null)"
 
-grp "A5a 目标缺列 fail-fast（dst shop.orders 删 remark）"
+grp "A5a 目标缺列：源级 failed + 精准报列（多源 D5 语义）"
 $DST -e "ALTER TABLE shop.orders DROP COLUMN remark" 2>/dev/null
-cc_run a5a verify "$V2/body_main.yml"
-grep -q "remark" /tmp/v2/a5a/out.log && [ "$(cat /tmp/v2/a5a/exit.log)" = "1" ] \
-  && ok "A5a 精准报缺少源列 remark" || bad "A5a"
+ccput verify "$V2/body_main.yml"
+stub_start a5a verify :9595 :8060
+if wait_ready 9595 40; then
+  wait_log /tmp/v2/a5a.log "源装配失败" 30
+  if grep -q "remark" /tmp/v2/a5a.log && grep -q "目标表结构核对未通过\|源装配失败" /tmp/v2/a5a.log; then
+    ok "A5a 精准报缺少源列 remark（源 failed，进程存活）"
+  else
+    bad "A5a $(grep -m1 -E 'remark|装配失败' /tmp/v2/a5a.log | head -c 150)"
+  fi
+else
+  bad "A5a 进程未存活"
+fi
+killall_gocdc
 $DST -e "ALTER TABLE shop.orders ADD COLUMN remark VARCHAR(255) NULL AFTER amount" 2>/dev/null
 
 grp "A5b 目标多余可空列静默放行"

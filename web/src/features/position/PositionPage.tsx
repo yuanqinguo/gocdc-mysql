@@ -1,8 +1,10 @@
 import { useState } from 'react'
 import { App as AntApp, Button, Form, Input, InputNumber, Modal } from 'antd'
-import { ExclamationCircleOutlined, LockOutlined, SafetyCertificateOutlined, SwapOutlined } from '@ant-design/icons'
+import { AimOutlined, ExclamationCircleOutlined, LockOutlined, SafetyCertificateOutlined, SwapOutlined } from '@ant-design/icons'
+import { Link } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useApi } from '@/app/api'
+import { useSourceScope } from '@/app/sourceScope'
 import { queryKeys, usePosition, useStatus } from '@/shared/api/queries'
 import { Callout } from '@/shared/components/Callout'
 import { DataCard } from '@/shared/components/DataCard'
@@ -11,17 +13,28 @@ import { PageHeader } from '@/shared/components/PageHeader'
 import { Chip, CodeValue } from '@/shared/components/presentation'
 
 export function PositionPage() {
-  const { data: position, isPending, error, refetch } = usePosition()
+  const { currentSid } = useSourceScope()
+  const { data: status } = useStatus()
+  const sources = status?.sources ?? []
+  const effectiveSid = currentSid ?? (sources.length === 1 ? sources[0]?.id ?? null : null)
+  return effectiveSid ? <SingleSourcePosition sid={effectiveSid} /> : <AllSourcesPosition />
+}
+
+/** 单源视图：位点卡 / 模式迁移 / SET-POSITION / etcdctl 指引（全部带 sid）。 */
+function SingleSourcePosition({ sid }: { sid: string }) {
+  const { data: position, isPending, error, refetch } = usePosition(sid)
   const { data: status } = useStatus()
   const [open, setOpen] = useState(false)
   const [form] = Form.useForm<{ name: string; pos: number; confirmation: string }>()
   const api = useApi()
   const queryClient = useQueryClient()
   const { message, modal } = AntApp.useApp()
+  const source = status?.sources.find((item) => item.id === sid)
+  const useGTID = source?.use_gtid ?? false
   const update = useMutation({
-    mutationFn: (input: { name: string; pos: number }) => api.setPosition({ ...input, confirm: 'SET-POSITION' }),
+    mutationFn: (input: { name: string; pos: number }) => api.setPositionOf(sid, { ...input, confirm: 'SET-POSITION' }),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.position })
+      await queryClient.invalidateQueries({ queryKey: queryKeys.position(sid) })
       void message.success('位点修改请求已提交。')
       setOpen(false)
       form.resetFields()
@@ -29,7 +42,7 @@ export function PositionPage() {
     onError: (cause) => void message.error(cause.message),
   })
   const pausePipe = useMutation({
-    mutationFn: () => api.pausePipeline(),
+    mutationFn: () => api.pausePipelineOf(sid),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: queryKeys.status })
       void message.success('管线暂停中：位点已落盘，现在可以安全修改位点。')
@@ -37,11 +50,11 @@ export function PositionPage() {
     onError: (cause) => void message.error(cause.message),
   })
   const refreshPosition = async () => {
-    await queryClient.invalidateQueries({ queryKey: queryKeys.position })
+    await queryClient.invalidateQueries({ queryKey: queryKeys.position(sid) })
     void message.success('位点迁移完成，按提示重启进程生效。')
   }
   const migrateGTID = useMutation({
-    mutationFn: () => api.migrateGTID(),
+    mutationFn: () => api.migrateGTIDOf(sid),
     onSuccess: async (result) => {
       await refreshPosition()
       void message.info(`已写入 gtid_set（窗口 ${result.gap_bytes} 字节）。${result.next}`)
@@ -49,7 +62,7 @@ export function PositionPage() {
     onError: (cause) => void message.error(cause.message),
   })
   const migrateFilePos = useMutation({
-    mutationFn: () => api.migrateFilePos(),
+    mutationFn: () => api.migrateFilePosOf(sid),
     onSuccess: async (result) => {
       await refreshPosition()
       void message.info(`${result.name}:${result.pos} — ${result.next}`)
@@ -64,7 +77,7 @@ export function PositionPage() {
         icon: <ExclamationCircleOutlined />,
         content: (
           <div className="danger-confirm-copy">
-            <p>即将将同步位置设置为：</p>
+            <p>即将把源「{sid}」的同步位置设置为：</p>
             <CodeValue>{`${values.name}:${values.pos}`}</CodeValue>
             <p>请确认管线当前未在消费位点（运行中写入会被水位覆盖），且该位点对应的 binlog 仍可用。</p>
           </div>
@@ -77,9 +90,10 @@ export function PositionPage() {
     })
   }
 
-  const canMigrateGTID = !!status?.use_gtid && !!position && !!position.name && !position.gtid_set
-  const canMigrateFilePos = status?.use_gtid === false && !!position?.gtid_set
-  const posKey = `/gocdc/${status?.cluster || '{集群名}'}/position`
+  const pipelineState = source?.pipeline_state
+  const canMigrateGTID = useGTID && !!position && !!position.name && !position.gtid_set
+  const canMigrateFilePos = useGTID === false && !!position?.gtid_set
+  const posKey = `/gocdc/${status?.cluster || '{集群名}'}/sources/${sid}/position`
   const manualValue = JSON.stringify({
     v: 1,
     name: position?.name || 'mysql-bin.000123',
@@ -93,16 +107,16 @@ export function PositionPage() {
   return <>
     <PageHeader
       code="03"
-      eyebrow="复制 / 同步位点"
+      eyebrow={`复制 / 同步位点 · 源 ${sid}`}
       title="位点管理"
-      description="当前持久化位点保存在 etcd；修改位点属于危险运维操作。"
+      description={`源「${sid}」的持久化位点保存在 etcd；修改位点属于危险运维操作。`}
     />
     <Callout tone="danger" title="位点修改前必须确认管线未在运行">
-      管线运行中写入的位点会被水位落盘覆盖回去；错误的位点可能造成数据缺失或重复回放。可先在总控台暂停管线（优雅停机、保持 Leader），或全部节点停机后经 etcdctl 直接写位点 key <CodeValue>{posKey}</CodeValue>。
+      管线运行中写入的位点会被水位落盘覆盖回去；错误的位点可能造成数据缺失或重复回放。可先在总控台暂停该源管线（优雅停机、保持 Leader），或全部节点停机后经 etcdctl 直接写位点 key <CodeValue>{posKey}</CodeValue>。
     </Callout>
     {error ? <ErrorState error={error} onRetry={() => void refetch()} /> : isPending ? <LoadingState rows={3} /> : <>
       <DataCard
-        title={<b>已保存的同步位置</b>}
+        title={<b>已保存的同步位置 · 源 {sid}</b>}
         extra={<Button onClick={() => void refetch()}>刷新</Button>}
       >
         {position ? <>
@@ -148,7 +162,7 @@ export function PositionPage() {
           {canMigrateGTID && (
             <Button type="primary" icon={<SafetyCertificateOutlined />} loading={migrateGTID.isPending}
               onClick={() => modal.confirm({
-                title: '确认迁移位点 → GTID',
+                title: `确认迁移位点 → GTID · 源 ${sid}`,
                 icon: <ExclamationCircleOutlined />,
                 content: (
                   <div className="danger-confirm-copy">
@@ -165,7 +179,7 @@ export function PositionPage() {
           {canMigrateFilePos && (
             <Button type="primary" icon={<SafetyCertificateOutlined />} loading={migrateFilePos.isPending}
               onClick={() => modal.confirm({
-                title: '确认迁回 file:pos（重放模式）',
+                title: `确认迁回 file:pos（重放模式）· 源 ${sid}`,
                 icon: <ExclamationCircleOutlined />,
                 content: (
                   <div className="danger-confirm-copy">
@@ -194,14 +208,14 @@ export function PositionPage() {
       </section>
     </>}
 
-    <Modal title="手动覆盖同步位点" width={640} open={open} onCancel={() => setOpen(false)} okText="继续确认" cancelText="取消" onOk={submit} okButtonProps={{ danger: true }}>
-      {status && (status.pipeline_state === 'running' || status.pipeline_state === 'stock') ? (
+    <Modal title={`手动覆盖同步位点 · 源 ${sid}`} width={640} open={open} onCancel={() => setOpen(false)} okText="继续确认" cancelText="取消" onOk={submit} okButtonProps={{ danger: true }}>
+      {pipelineState === 'running' || pipelineState === 'stock' ? (
         <Callout
           tone="danger"
           title="管线正在运行——现在提交会被水位覆盖"
           action={<Button size="small" loading={pausePipe.isPending} onClick={() => pausePipe.mutate()}>暂停管线</Button>}
         >
-          当前状态为「{status.pipeline_state === 'running' ? '同步中' : '全量回放'}」，修改会被运行中的管线覆盖回去。先暂停管线（优雅停机、位点落盘、保持 Leader），状态变为「已暂停」后再执行本操作。
+          该源当前状态为「{pipelineState === 'running' ? '同步中' : '全量回放'}」，修改会被运行中的管线覆盖回去。先暂停管线（优雅停机、位点落盘、保持 Leader），状态变为「已暂停」后再执行本操作。
         </Callout>
       ) : (
         <Callout tone="warning" title="全部节点已停机？API 不可用时直接写 etcd">
@@ -223,9 +237,44 @@ etcdctl put ${posKey} '${manualValue}'`}</pre>
         <Form.Item name="confirmation" label={<span>确认执行：原样输入 <CodeValue>SET-POSITION</CodeValue></span>} rules={[{ required: true, message: '请原样输入 SET-POSITION' }, { validator: async (_, value: string) => { if (value !== 'SET-POSITION') throw new Error('须与 SET-POSITION 完全一致') } }]}>
           <Input autoComplete="off" placeholder="SET-POSITION" />
         </Form.Item>
-        <p className="form-note">这会直接写入 etcd 中的位点。修改结果不可撤销，请在提交前留存当前位点。最后一栏是接口强制的确认字符串（防误触），不是位点。</p>
+        <p className="form-note">这会直接写入 etcd 中该源的位点。修改结果不可撤销，请在提交前留存当前位点。最后一栏是接口强制的确认字符串（防误触），不是位点。</p>
       </Form>
     </Modal>
+  </>
+}
+
+/** 全部视图（多源）：各源位点摘要（只读），操作跳转单源视图。 */
+function AllSourcesPosition() {
+  const { data: status, isPending, error, refetch } = useStatus()
+  const sources = status?.sources ?? []
+  return <>
+    <PageHeader
+      code="03"
+      eyebrow="复制 / 同步位点"
+      title="位点管理"
+      description="全部源的持久化位点摘要（只读）。修改、模式迁移等危险操作请进入单源视图执行。"
+      extra={status ? <Button onClick={() => void refetch()}>刷新</Button> : undefined}
+    />
+    {error ? <ErrorState error={error} onRetry={() => void refetch()} /> : isPending || !status ? <LoadingState rows={3} /> : (
+      <DataCard title={<b>各源位点摘要</b>} extra={<span className="live-indicator"><i />自动刷新 · 15 秒</span>}>
+        <div className="position-summary-list">
+          {sources.map((source) => {
+            const position = source.position
+            return (
+              <div className="position-summary-row" key={source.id}>
+                <span className="entity">
+                  <span className="entity-icon"><AimOutlined /></span>
+                  <span><b>{source.id}</b><small>{position ? `序号 ${position.seq.toLocaleString()} · 任期 ${position.term}` : '尚未保存位点'}</small></span>
+                </span>
+                <CodeValue>{position ? `${position.name}:${position.pos.toLocaleString()}` : '—'}</CodeValue>
+                <span className="time-cell">{position ? formatDate(position.updated_at) : '—'}</span>
+                <Link to={`/position?source=${encodeURIComponent(source.id)}`} className="source-card-detail">单源操作</Link>
+              </div>
+            )
+          })}
+        </div>
+      </DataCard>
+    )}
   </>
 }
 

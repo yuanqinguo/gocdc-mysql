@@ -17,15 +17,22 @@ import (
 
 // SourceDeps 单源路由依赖（多源 PRD 06 §1.5：现行 Deps 的源私有字段按源
 // 拆出；源集合在装配期固定（配置不热更 ⇒ 进程生命周期内不变，map 只读）。
+//
+// 数据面组件（规则/DDL 门/连接）与 Web 启动并发装配——相关字段为惰性闭包，
+// 未就绪时返回 nil（handler 显式 409，绝不 nil deref）；etcd 状态面（Store/
+// Markers）装配期即构造，恒可用。
 type SourceDeps struct {
 	ID     string
 	Store  *position.Store
 	Markers interface {
 		ResetTable(ctx context.Context, db, table string) error
 	}
-	Rules     *pipeline.CompiledRules
-	Gate      pipeline.DDLGate
-	DDLLister pipeline.DDLLister
+	// Rules 规则编译产物（nil 返回 = 未装配）。
+	Rules func() *pipeline.CompiledRules
+	// Gate DDL 审批门（nil 返回 = 未装配）。
+	Gate func() pipeline.DDLGate
+	// DDLLister 挂起记录查询（nil 返回 = 未装配，列表口径出空数组）。
+	DDLLister func() pipeline.DDLLister
 	// StockReset 源级全量重跑（nil = 未装配——非 leader 节点走 409 语义错误）。
 	StockReset func(ctx context.Context, db, table string) error
 	// PausePipeline/ResumePipeline 该源人工暂停与恢复（13 §3 逐源版）。

@@ -1,9 +1,10 @@
 import { useState } from 'react'
-import { App as AntApp, Button, Form, Input, InputNumber, Modal } from 'antd'
-import { CheckCircleOutlined, ReloadOutlined, WarningOutlined } from '@ant-design/icons'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { App as AntApp, Button, Collapse, Form, Input, InputNumber, Modal } from 'antd'
+import { CheckCircleOutlined, DatabaseOutlined, ReloadOutlined, WarningOutlined } from '@ant-design/icons'
+import { useMutation, useQueries, useQueryClient } from '@tanstack/react-query'
 import { useApi } from '@/app/api'
-import { queryKeys, useEffectiveRules, useDDLEvents } from '@/shared/api/queries'
+import { useSourceScope } from '@/app/sourceScope'
+import { queryKeys, useDDLEvents, useDDLEventsAll, useEffectiveRules, useSources, useStatus } from '@/shared/api/queries'
 import type { EffectiveRule, VerifyResult } from '@/shared/api/types'
 import { Callout } from '@/shared/components/Callout'
 import { ErrorState, LoadingState } from '@/shared/components/PageState'
@@ -11,8 +12,18 @@ import { PageHeader } from '@/shared/components/PageHeader'
 import { RuleExplorer } from './RuleExplorer'
 
 export function RulesPage() {
-  const { data: rules = [], isPending, error, refetch } = useEffectiveRules()
-  const { data: ddlEvents = [] } = useDDLEvents()
+  const { currentSid } = useSourceScope()
+  const { data: status } = useStatus()
+  // 无选中源时单源部署默认锁定唯一源
+  const sources = status?.sources ?? []
+  const effectiveSid = currentSid ?? (sources.length === 1 ? sources[0]?.id ?? null : null)
+  return effectiveSid ? <SingleSourceRules sid={effectiveSid} /> : <AllSourcesRules />
+}
+
+/** 单源视图：该源生效规则 + 重跑/对账操作。 */
+function SingleSourceRules({ sid }: { sid: string }) {
+  const { data: rules = [], isPending, error, refetch } = useEffectiveRules(sid)
+  const { data: ddlEvents = [] } = useDDLEvents(sid)
   const [verifyRule, setVerifyRule] = useState<EffectiveRule | null>(null)
   const [verifyResult, setVerifyResult] = useState<VerifyResult | null>(null)
   const [form] = Form.useForm<{ pk: string; sample: number }>()
@@ -20,16 +31,16 @@ export function RulesPage() {
   const queryClient = useQueryClient()
   const { message, modal } = AntApp.useApp()
   const restock = useMutation({
-    mutationFn: (rule: EffectiveRule) => api.restock(rule.schema, rule.table),
+    mutationFn: (rule: EffectiveRule) => api.restockOf(sid, rule.schema, rule.table),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.rules })
+      await queryClient.invalidateQueries({ queryKey: queryKeys.rules(sid) })
       void message.success('已重置该表的全量标记。')
     },
     onError: (e) => void message.error(e.message),
   })
   const verify = useMutation({
     mutationFn: (input: { rule: EffectiveRule; pk: string; sample: number }) =>
-      api.verify(input.rule.schema, input.rule.table, input.pk, input.sample),
+      api.verifyOf(sid, input.rule.schema, input.rule.table, input.pk, input.sample),
     onSuccess: (result) => setVerifyResult(result),
     onError: (e) => void message.error(e.message),
   })
@@ -37,7 +48,7 @@ export function RulesPage() {
   const confirmRestock = (rule: EffectiveRule) => {
     modal.confirm({
       title: '确认重跑全量同步？',
-      content: <span>将重置 <b>{rule.schema}.{rule.table}</b> 的全量标记。请先确认目标表状态和下游负载。</span>,
+      content: <span>将重置源「{sid}」的 <b>{rule.schema}.{rule.table}</b> 全量标记。请先确认目标表状态和下游负载。</span>,
       okText: '确认重跑', okButtonProps: { danger: true }, cancelText: '取消',
       onOk: () => restock.mutateAsync(rule),
     })
@@ -51,9 +62,9 @@ export function RulesPage() {
   return <>
     <PageHeader
       code="02"
-      eyebrow="复制 / 规则目录"
+      eyebrow={`复制 / 规则目录 · 源 ${sid}`}
       title="复制规则"
-      description="组形态白名单的库级摘要与逐表生效视图；列表来自后端编译产物，前端不做继承推算。"
+      description={`源「${sid}」组形态白名单的库级摘要与逐表生效视图；列表来自后端编译产物，前端不做继承推算。`}
       extra={<Button icon={<ReloadOutlined />} onClick={() => void refetch()}>刷新规则</Button>}
     />
     <Callout tone="info" title="规则视图说明">
@@ -63,15 +74,90 @@ export function RulesPage() {
       <RuleExplorer rules={rules} pendingDDL={ddlEvents} showActions
         onRestock={confirmRestock} onVerify={openVerify} actionPending={restock.isPending} />
     )}
+    <VerifyModal
+      verifyRule={verifyRule}
+      verifyResult={verifyResult}
+      form={form}
+      pending={verify.isPending}
+      onSubmit={() => !verifyRule ? undefined : form.validateFields().then((values) => verify.mutateAsync({ rule: verifyRule, pk: values.pk, sample: values.sample })).then(() => undefined)}
+      onClose={() => { setVerifyRule(null); setVerifyResult(null) }}
+    />
+  </>
+}
+
+/** 全部视图（多源）：按源分组的折叠列表，只读。 */
+function AllSourcesRules() {
+  const sources = useSources()
+  const ddlAll = useDDLEventsAll()
+  const api = useApi()
+  const ids = sources.data?.map((item) => item.id) ?? []
+  const rulesQueries = useQueries({
+    queries: ids.map((sid) => ({
+      queryKey: queryKeys.rules(sid),
+      queryFn: ({ signal }) => api.getEffectiveRulesOf(sid, signal),
+      staleTime: 30_000,
+    })),
+  })
+
+  return <>
+    <PageHeader
+      code="02"
+      eyebrow="复制 / 规则目录"
+      title="复制规则"
+      description="按源分组的生效规则只读视图；需要重跑全量或抽样对账时，从源选择器进入单源视图操作。"
+      extra={<Button icon={<ReloadOutlined />} onClick={() => void sources.refetch()}>刷新源清单</Button>}
+    />
+    <Callout tone="info" title="规则视图说明">
+      展开各源查看该源的库级摘要与表规则；单表重跑/抽样对账属于源作用域操作，请切换到单源视图执行。
+    </Callout>
+    {sources.isPending ? <LoadingState /> : sources.error ? <ErrorState error={sources.error} onRetry={() => void sources.refetch()} /> : (
+      <Collapse
+        className="source-collapse"
+        items={ids.map((sid, index) => {
+          const query = rulesQueries[index]!
+          const tables = query.data?.length ?? 0
+          return {
+            key: sid,
+            label: (
+              <span className="entity">
+                <span className="entity-icon"><DatabaseOutlined /></span>
+                <span><b>{sid}</b><small>{tables} 张表 · 只读视图</small></span>
+              </span>
+            ),
+            children: query.isPending
+              ? <LoadingState />
+              : query.error
+                ? <ErrorState error={query.error} onRetry={() => void query.refetch()} />
+                : <RuleExplorer
+                    rules={query.data ?? []}
+                    pendingDDL={(ddlAll.data ?? []).filter((record) => record.source === sid)}
+                    schemaSearchPlaceholder={`在源 ${sid} 中搜索源库…`}
+                  />,
+          }
+        })}
+      />
+    )}
+  </>
+}
+
+function VerifyModal({ verifyRule, verifyResult, form, pending, onSubmit, onClose }: {
+  verifyRule: EffectiveRule | null
+  verifyResult: VerifyResult | null
+  form: ReturnType<typeof Form.useForm<{ pk: string; sample: number }>>[0]
+  pending: boolean
+  onSubmit: () => void | Promise<void>
+  onClose: () => void
+}) {
+  return (
     <Modal
       title={verifyResult ? '抽样对账结果' : `抽样对账 · ${verifyRule?.schema}.${verifyRule?.table}`}
       open={verifyRule !== null}
-      onCancel={() => { setVerifyRule(null); setVerifyResult(null) }}
-      footer={verifyResult ? <Button type="primary" onClick={() => { setVerifyRule(null); setVerifyResult(null) }}>完成</Button> : undefined}
+      onCancel={onClose}
+      footer={verifyResult ? <Button type="primary" onClick={onClose}>完成</Button> : undefined}
       okText="开始对账"
       cancelText="关闭"
-      confirmLoading={verify.isPending}
-      onOk={() => !verifyRule ? undefined : form.validateFields().then((values) => verify.mutateAsync({ rule: verifyRule, pk: values.pk, sample: values.sample })).then(() => undefined)}
+      confirmLoading={pending}
+      onOk={onSubmit}
     >
       {verifyResult ? <div className="verify-result">
         <div className={`verify-summary ${verifyResult.mismatch === 0 ? 'verify-ok' : 'verify-diff'}`}>
@@ -101,5 +187,5 @@ export function RulesPage() {
         <div className="modal-footnote">接口最大抽样上限为 1000 行；脱敏字段在目标端值不同属于预期差异。</div>
       </>}
     </Modal>
-  </>
+  )
 }

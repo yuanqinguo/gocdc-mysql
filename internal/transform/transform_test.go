@@ -293,7 +293,7 @@ func TestRow_ConvertErrorMetrics(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if got := testutil.ToFloat64(m.ConvertErrors.WithLabelValues("db1", "t", "n", "null")); got != 1 {
+	if got := testutil.ToFloat64(m.ConvertErrors.WithLabelValues("", "db1", "t", "n", "null")); got != 1 {
 		t.Fatalf("convert_errors 计数应为 1，实际 %v", got)
 	}
 }

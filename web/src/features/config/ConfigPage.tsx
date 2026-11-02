@@ -1,7 +1,10 @@
 import { useState, type ReactNode } from 'react'
 import { App as AntApp, Button, Segmented } from 'antd'
-import { CodeOutlined, CopyOutlined, SafetyCertificateOutlined } from '@ant-design/icons'
-import { useConfig, useDDLEvents, useEffectiveRules } from '@/shared/api/queries'
+import { CodeOutlined, CopyOutlined, DatabaseOutlined, SafetyCertificateOutlined } from '@ant-design/icons'
+import { useQueries } from '@tanstack/react-query'
+import { useApi } from '@/app/api'
+import { useSourceScope } from '@/app/sourceScope'
+import { queryKeys, useConfig, useDDLEventsAll, useStatus } from '@/shared/api/queries'
 import { Callout } from '@/shared/components/Callout'
 import { ErrorState, LoadingState } from '@/shared/components/PageState'
 import { PageHeader } from '@/shared/components/PageHeader'
@@ -12,10 +15,9 @@ type ConfigTab = 'config' | 'rules'
 
 export function ConfigPage() {
   const [tab, setTab] = useState<ConfigTab>('config')
+  const { currentSid } = useSourceScope()
   const { message } = AntApp.useApp()
   const config = useConfig()
-  const rules = useEffectiveRules()
-  const ddlEvents = useDDLEvents()
   const [copied, setCopied] = useState(false)
   const content = config.data === undefined ? '' : JSON.stringify(config.data, null, 2)
 
@@ -33,7 +35,7 @@ export function ConfigPage() {
   return <>
     <PageHeader
       code="05"
-      eyebrow="系统 / 运行配置"
+      eyebrow={currentSid ? `系统 / 运行配置 · 源 ${currentSid}` : '系统 / 运行配置'}
       title="生效配置"
       description="查看当前生效配置与编译后的规则视图（组形态白名单）。修改须在外部配置中心完成并重启服务。"
     />
@@ -69,13 +71,7 @@ export function ConfigPage() {
               </div>
             )
       )}
-      {tab === 'rules' && (
-        rules.error
-          ? <div className="config-state"><ErrorState error={rules.error} onRetry={() => void rules.refetch()} /></div>
-          : rules.isPending
-            ? <div className="config-state"><LoadingState /></div>
-            : <div className="config-rules"><RuleExplorer rules={rules.data ?? []} pendingDDL={ddlEvents.data ?? []} schemaSearchPlaceholder="搜索源库…" /></div>
-      )}
+      {tab === 'rules' && <ConfigRulesTab />}
     </section>
     <div className="note-line">
       <SafetyCertificateOutlined />
@@ -85,6 +81,47 @@ export function ConfigPage() {
 }
 
 const JSON_TOKEN = /("(?:\\.|[^"\\])*")(\s*:)?|\b(true|false|null)\b|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/g
+
+/** 规则视图（按库）：配置是全量 v2——按 sources[] 分组展示（每组标注所属源）。 */
+function ConfigRulesTab() {
+  const api = useApi()
+  const status = useStatus()
+  const ddlAll = useDDLEventsAll()
+  const ids = status.data?.sources.map((source) => source.id) ?? []
+  const rulesQueries = useQueries({
+    queries: ids.map((sid) => ({
+      queryKey: queryKeys.rules(sid),
+      queryFn: ({ signal }) => api.getEffectiveRulesOf(sid, signal),
+      staleTime: 30_000,
+    })),
+  })
+  if (status.error) return <div className="config-state"><ErrorState error={status.error} onRetry={() => void status.refetch()} /></div>
+  if (status.isPending) return <div className="config-state"><LoadingState /></div>
+  return (
+    <div className="config-rules">
+      {rulesQueries.map((query, index) => {
+        const sid = ids[index]
+        return (
+          <section className="config-source-group" key={sid}>
+            <header className="config-source-head">
+              <span className="entity"><span className="entity-icon"><DatabaseOutlined /></span><span><b>{sid}</b></span></span>
+              <Chip tone="muted">{query.data?.length ?? 0} 张表</Chip>
+            </header>
+            {query.error
+              ? <ErrorState error={query.error} onRetry={() => void query.refetch()} />
+              : query.isPending
+                ? <LoadingState />
+                : <RuleExplorer
+                    rules={query.data ?? []}
+                    pendingDDL={(ddlAll.data ?? []).filter((record) => record.source === sid)}
+                    schemaSearchPlaceholder={`在源 ${sid} 中搜索源库…`}
+                  />}
+          </section>
+        )
+      })}
+    </div>
+  )
+}
 
 function JsonCode({ content }: { content: string }) {
   if (!content) return <div className="code-empty">暂无配置内容</div>

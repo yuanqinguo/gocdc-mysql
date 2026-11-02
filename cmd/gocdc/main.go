@@ -157,6 +157,7 @@ func run(opts *options) error {
 	for _, src := range rt.sources.all() {
 		go rt.superviseSource(ctx, src)
 	}
+	go rt.metricsLoop(ctx) // gocdc_sources / gocdc_source_up 聚合指标（PRD 07 §1）
 	defer func() {
 		for _, src := range rt.sources.all() {
 			rt.closeSourceComponents(src)

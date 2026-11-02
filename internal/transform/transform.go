@@ -35,6 +35,7 @@ type Options struct {
 	DecimalAs      string           // Decimal*；空 = string
 	ZeroDatetimeAs string           // ZeroDatetime*；空 = null
 	Metrics        *metrics.Metrics // 可 nil（单测）
+	SourceID       string           // 指标 source label（多源；空 = 单源/测试）
 }
 
 // Transformer 值转换与事件构建（全量/增量共用同一实例，04 §7 补充规则）。
@@ -305,7 +306,7 @@ func (t *Transformer) countError(meta *model.TableMeta, column, action string) {
 	if t.opts.Metrics == nil {
 		return
 	}
-	t.opts.Metrics.ConvertErrors.WithLabelValues(meta.Schema, meta.Table, column, action).Inc()
+	t.opts.Metrics.ConvertErrors.WithLabelValues(t.opts.SourceID, meta.Schema, meta.Table, column, action).Inc()
 }
 
 func isExcluded(rule *model.Rule, col string) bool {

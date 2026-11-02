@@ -32,7 +32,7 @@ for i in $(seq 1 20); do LB=$(lagof 9595); [ "$LB" = "0" ] && break; sleep 2; do
 C5=$($DST -N -e "SELECT COUNT(*) FROM rmqtest.msg" 2>/dev/null)
 echo "  先增量落目标: dst=$C5（期待100）"
 TS=$(date +%s)
-echo "  restock 前标记: $($ETCDC get /gocdc/verify/stock/rmqtest.msg --print-value-only 2>/dev/null | head -c 40)"
+echo "  restock 前标记: $($ETCDC get /gocdc/verify/sources/default/stock/rmqtest.msg --print-value-only 2>/dev/null | head -c 40)"
 curl -sS --noproxy '*' --max-time 10 -u admin:demo123 -X POST -o /tmp/v2/rs.json -w '%{http_code}' "$API/rules/rmqtest.msg/restock?confirm=true" > /tmp/v2/rs.code 2>/tmp/v2/rs.err
 echo "  restock: code=$(cat /tmp/v2/rs.code 2>/dev/null) err=[$(cat /tmp/v2/rs.err 2>/dev/null)] body=[$(cat /tmp/v2/rs.json 2>/dev/null)] pid=$(pickpid node1)"
 kill -TERM $(pickpid node1) 2>/dev/null
@@ -40,7 +40,7 @@ for i in $(seq 1 30); do [ -z "$(pickpid node1)" ] && break; sleep 1; done
 stub_start node1 verify :9595 :8060
 wait_ready 9595 60 || bad "I0 重启"
 sleep 3
-echo "  重启后标记: $($ETCDC get /gocdc/verify/stock/rmqtest.msg --print-value-only 2>/dev/null | head -c 40)"
+echo "  重启后标记: $($ETCDC get /gocdc/verify/sources/default/stock/rmqtest.msg --print-value-only 2>/dev/null | head -c 40)"
 # 消费者在重启完成后才起：topic 自组首重置后未清过，新组从 EARLIEST 重放全部积压
 # （含刚产出的重扫快照事件）——天然免疫跨重启的 idle 超时
 setsid nohup $RMQCONS -topic CDC_rmqtest_msg -group g5-$TS -out /tmp/rmq-g5.jsonl -idle 15s > /tmp/rmqcons-g5.log 2>&1 &

@@ -8,11 +8,12 @@ import (
 
 // ddlEventsOf GET 源作用域 DDL 审批挂起列表（schema/table 均空 = 全部挂起记录）。
 func ddlEventsOf(sd *SourceDeps, c *gin.Context) {
-	if sd.DDLLister == nil {
+	lister := sd.DDLLister()
+	if lister == nil { // 未装配（装配中/失败）：空列表诚实口径（列表页不因单源未就绪 409）
 		respondOK(c, []pipeline.DDLRecord{})
 		return
 	}
-	recs, err := sd.DDLLister.PendingByTable(c.Request.Context(),
+	recs, err := lister.PendingByTable(c.Request.Context(),
 		c.Query("schema"), c.Query("table"))
 	if err != nil {
 		respondErr(c, 500, err.Error())
@@ -42,10 +43,14 @@ func (h apiHandlers) ddlEventsAll(c *gin.Context) {
 	out := []pipeline.DDLRecord{}
 	for _, sid := range h.SourceOrder {
 		sd := h.Sources[sid]
-		if sd == nil || sd.DDLLister == nil {
+		if sd == nil {
 			continue
 		}
-		recs, err := sd.DDLLister.PendingByTable(c.Request.Context(),
+		lister := sd.DDLLister()
+		if lister == nil {
+			continue
+		}
+		recs, err := lister.PendingByTable(c.Request.Context(),
 			c.Query("schema"), c.Query("table"))
 		if err != nil {
 			respondErr(c, 500, sid+": "+err.Error())
@@ -72,7 +77,12 @@ func (h apiHandlers) settleDDLOf(sd *SourceDeps, decision string) func(c *gin.Co
 		if !requireConfirm(c) {
 			return
 		}
-		err := sd.Gate.Settle(c.Request.Context(), c.Param(paramEventID), decision, note)
+		gate := sd.Gate()
+		if gate == nil { // 源数据面未装配（装配中/失败）：显式报错不 panic
+			abort(c, 409, "该源组件未就绪（装配中或装配失败，稍后重试或查看日志）")
+			return
+		}
+		err := gate.Settle(c.Request.Context(), c.Param(paramEventID), decision, note)
 		auditSource(auditOrNil(h.Audit), c, sd.ID, what, c.Param(paramEventID), err)
 		respondResult(c, err)
 	}

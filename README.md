@@ -31,6 +31,11 @@ lightweight middle ground:
 
 - **One Go binary, zero JVM** — the Web console is embedded (`go:embed`); deploy
   is a process, not a platform.
+- **Multi-source in one process** — a single cluster (one election, one Web
+  console, one metrics endpoint) carries up to 64 MySQL sources, each with its
+  own rules, sinks, positions, snapshot marks, DDL approvals and pause flag;
+  failures are isolated per source (one dead source never stops the others).
+  v1 configs upgrade in place (auto-wrapped + etcd keys migrated).
 - **Built-in HA** — etcd leader election; if the leader is killed (`kill -9`), a
   hot standby takes over within lease TTL + 10s and **no events are lost**
   (positions live in etcd, MySQL sink is idempotent upsert).
@@ -171,8 +176,9 @@ single-binary end of the spectrum.
 | Doc | Contents |
 |-----|----------|
 | [docs/GUIDE.md](docs/GUIDE.md) (中文) | Full user guide: source/target requirements, every config field, deployment topologies, DDL handling, MQ topics, production checklist, FAQ |
-| [docs/RUNBOOK.md](docs/RUNBOOK.md) (中文) | Operations runbook: position rewind, restock, failover drills, etcd failures, DDL approvals |
+| [docs/RUNBOOK.md](docs/RUNBOOK.md) (中文) | Operations runbook: position rewind, restock, failover drills, etcd failures, DDL approvals, multi-source ops (§9) |
 | [docs/arch/](docs/arch/README.md) (中文) | 11 design documents: pipeline parallelism, delivery semantics, snapshot protocol, DDL strategy, backpressure, observability |
+| [docs/prd/](docs/prd/README.md) (中文) | Multi-source PRD: config v2, etcd key migration, per-source failure isolation, source-scoped API/Web |
 | [deploy/README.md](deploy/README.md) | Demo topology and verification commands |
 | [docs/TESTCASES.md](docs/TESTCASES.md) (中文) | Acceptance test checklist |
 

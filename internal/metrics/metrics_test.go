@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// expectedMetrics 11 §1 全清单（存在性测试基准）。
+// expectedMetrics 11 §1 全清单 + 多源新增（存在性测试基准，PRD 07 §1）。
 var expectedMetrics = []string{
 	"gocdc_events_in_total",
 	"gocdc_events_out_total",
@@ -33,24 +33,37 @@ var expectedMetrics = []string{
 	"gocdc_leader_state",
 	"gocdc_leader_term",
 	"gocdc_etcd_request_duration_seconds",
+	"gocdc_sources",
+	"gocdc_source_up",
 }
 
 // initAll 给每个 Vec 指标触发一个子项——未使用的 Vec 不产生 MetricFamily（prometheus 惯例）。
+// 源私有指标统一传 sid（source label 第一维）。
 func initAll(m *Metrics) {
-	m.EventsIn.WithLabelValues("d", "t", "insert").Inc()
-	m.EventsOut.WithLabelValues("d", "t", "insert", "mysql").Inc()
-	m.EventsFailed.WithLabelValues("mysql", "timeout").Inc()
-	m.BytesOut.WithLabelValues("mysql").Add(1)
-	m.ConvertErrors.WithLabelValues("d", "t", "c", "fail_event").Inc()
-	m.DeadLetter.WithLabelValues("d", "t", "kafka", "oversize").Inc()
-	m.MessageOversize.WithLabelValues("d", "t", "kafka").Inc()
-	m.SinkBatchDuration.WithLabelValues("mysql", "d", "t").Observe(0.01)
-	m.SinkRetryTotal.WithLabelValues("mysql").Inc()
-	m.WorkerQueueDepth.WithLabelValues("0").Set(0)
-	m.PipelinePaused.WithLabelValues("d", "t", "ddl").Set(0)
-	m.StockProgressRatio.WithLabelValues("d", "t").Set(0)
-	m.StockRowsTotal.WithLabelValues("d", "t").Inc()
+	const sid = "default"
+	m.EventsIn.WithLabelValues(sid, "d", "t", "insert").Inc()
+	m.EventsOut.WithLabelValues(sid, "d", "t", "insert", "mysql").Inc()
+	m.EventsFailed.WithLabelValues(sid, "mysql", "timeout").Inc()
+	m.BytesOut.WithLabelValues(sid, "mysql").Add(1)
+	m.ConvertErrors.WithLabelValues(sid, "d", "t", "c", "fail_event").Inc()
+	m.DeadLetter.WithLabelValues(sid, "d", "t", "kafka", "oversize").Inc()
+	m.MessageOversize.WithLabelValues(sid, "d", "t", "kafka").Inc()
+	m.EventLagSeconds.WithLabelValues(sid).Set(0)
+	m.PositionLagSeconds.WithLabelValues(sid).Set(0)
+	m.SetMasterPositionLagBytes(sid, 0)
+	m.SinkBatchDuration.WithLabelValues(sid, "mysql", "d", "t").Observe(0.01)
+	m.SinkRetryTotal.WithLabelValues(sid, "mysql").Inc()
+	m.WorkerQueueDepth.WithLabelValues(sid, "0").Set(0)
+	m.WorkerQueueOldestSecond.WithLabelValues(sid, "0").Set(0)
+	m.WatermarkSeq.WithLabelValues(sid).Set(0)
+	m.LastSavedSeq.WithLabelValues(sid).Set(0)
+	m.PipelinePaused.WithLabelValues(sid, "d", "t", "ddl").Set(0)
+	m.PositionSaveFailures.WithLabelValues(sid).Inc()
+	m.StockProgressRatio.WithLabelValues(sid, "d", "t").Set(0)
+	m.StockRowsTotal.WithLabelValues(sid, "d", "t").Inc()
 	m.EtcdRequestSeconds.WithLabelValues("put").Observe(0.001)
+	m.Sources.WithLabelValues("ready").Set(1)
+	m.SourceUp.WithLabelValues(sid).Set(1)
 }
 
 // TestAllMetricsRegistered 全部指标已注册（验收口径：curl /metrics 见 gocdc_ 前缀）。
@@ -72,15 +85,18 @@ func TestAllMetricsRegistered(t *testing.T) {
 	}
 }
 
-// TestMetricLabels 关键指标的标签集与 11 §1 定义一致。
+// TestMetricLabels 关键指标的标签集与 11 §1 + 多源 source label（PRD 07 §1）一致。
 func TestMetricLabels(t *testing.T) {
 	m := New()
-	m.EventsIn.WithLabelValues("db1", "t1", "insert").Inc()
-	m.EventsOut.WithLabelValues("db1", "t1", "insert", "mysql").Inc()
-	m.SinkBatchDuration.WithLabelValues("mysql", "db1", "t1").Observe(0.01)
-	m.WorkerQueueDepth.WithLabelValues("0").Set(3)
-	m.PipelinePaused.WithLabelValues("db1", "t1", "ddl").Set(1)
+	const sid = "src1"
+	m.EventsIn.WithLabelValues(sid, "db1", "t1", "insert").Inc()
+	m.EventsOut.WithLabelValues(sid, "db1", "t1", "insert", "mysql").Inc()
+	m.SinkBatchDuration.WithLabelValues(sid, "mysql", "db1", "t1").Observe(0.01)
+	m.WorkerQueueDepth.WithLabelValues(sid, "0").Set(3)
+	m.PipelinePaused.WithLabelValues(sid, "db1", "t1", "ddl").Set(1)
+	m.EventLagSeconds.WithLabelValues(sid).Set(1)
 	m.EtcdRequestSeconds.WithLabelValues("put").Observe(0.002)
+	m.LeaderState.Set(1)
 
 	families, _ := m.registry.Gather()
 	byName := map[string]struct {
@@ -93,10 +109,13 @@ func TestMetricLabels(t *testing.T) {
 		}
 		byName[mf.GetName()] = struct{ labels []string }{labels}
 	}
+	// 源私有指标必含 source；cluster 级指标必不含
 	for name, wantParts := range map[string][]string{
-		"gocdc_events_in_total":  {"db", "table", "type"},
-		"gocdc_events_out_total": {"sink"},
-		"gocdc_pipeline_paused":  {"reason"},
+		"gocdc_events_in_total":             {"source", "db", "table", "type"},
+		"gocdc_events_out_total":            {"source", "sink"},
+		"gocdc_pipeline_paused":             {"source", "reason"},
+		"gocdc_event_lag_seconds":           {"source"},
+		"gocdc_sink_batch_duration_seconds": {"source"},
 	} {
 		mf, ok := byName[name]
 		if !ok {
@@ -109,6 +128,15 @@ func TestMetricLabels(t *testing.T) {
 		for _, w := range wantParts {
 			if !got[w] {
 				t.Errorf("指标 %s 缺少标签 %q", name, w)
+			}
+		}
+	}
+	if mf, ok := byName["gocdc_leader_state"]; !ok {
+		t.Fatal("指标 gocdc_leader_state 不存在")
+	} else {
+		for _, l := range mf.labels {
+			if l == "source" {
+				t.Error("cluster 级指标 gocdc_leader_state 不应带 source 标签")
 			}
 		}
 	}
@@ -155,5 +183,17 @@ func TestHandlers(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != 200 {
 		t.Fatalf("/readyz 探针通过应 200，实际 %d", resp.StatusCode)
+	}
+}
+
+// TestMasterLagPerSource master lag 采样按源隔离读取（多源 /status 口径）。
+func TestMasterLagPerSource(t *testing.T) {
+	m := New()
+	m.SetMasterPositionLagBytes("src-a", 1024)
+	if v, ok := m.MasterPositionLagBytesValue("src-a"); !ok || v != 1024 {
+		t.Fatalf("src-a 采样读取: %v %v", v, ok)
+	}
+	if _, ok := m.MasterPositionLagBytesValue("src-b"); ok {
+		t.Fatal("src-b 未采样应返回 false")
 	}
 }

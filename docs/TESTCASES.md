@@ -153,6 +153,41 @@
 | ADV-16 | **GTID 模式暂停态 SET-POSITION**（2026-11-01 组55 PP-07 设计时对抗推演抓到） | 改位点只覆盖 name/pos，gtid_set/seq/任期沿用现值（与 etcdctl 直写指引语义一致） | ❌→✅ **抓到真 bug（整值覆盖抹空 GTID 集）**：setPosition 只构造 {name,pos,node_id} 直接 Save（整值覆盖）→ use_gtid=true 下暂停态改位点把 gtid_set 写空 → resume 后管线必因「位点缺 gtid_set」熔断；运行态等值覆盖（G3）因 3s 内水位回写未暴露。修复=mergeSetPosition 融合决策（现值为底只覆盖 name/pos；现值读取失败拒绝盲写）+ 回归测试 TestMergeSetPosition；L3 PP-07 固化「改位点→gtid_set 保留→恢复采用续跑」 |
 | ADV-17 | **审计 etcd key 真身路径**（2026-11-01 组55 PP-09 首轮抓到） | 环形审计 key = `{prefix}/events/audit`（NewAuditStore 契约：prefix=集群前缀） | ❌→✅ **抓到装配缺陷（prefix 双重拼接）**：admin.go 传 `coord.prefix+"/events/audit"` → 真身 key 变 `{prefix}/events/audit/events/audit`——环形读写自洽（Web /audit 正常）但 etcd 侧运维观察路径与文档/etcdctl 直觉不符；G4 的 `--prefix grep` 歪打正着命中双重 key 一直假阳性。修复=装配点传集群前缀 + PP-09 按真身 key 断言双通道留痕 |
 
+## 7.5 多源（MS，2026-11-02 多源特性，PRD docs/prd/08 §2）
+
+单进程多源（`sources[]` 配置 v2）的等价性验收：多源化的每个源在数据正确性/
+全量增量/HA/投递语义/DDL 审批/暂停恢复/位点操作上与单独部署一个单源集群一致。
+L3 脚本 `.verify/v2/35_ms_core.sh`（数据面）+ `46_ms_ha.sh`（故障面），
+环境含第二源库 vf-src2 / 第二目标库 vf-dst2（00_reset.sh 重建）。
+
+| ID | 场景 | 预期 | 层级 | 自动化 | 状态 |
+|----|------|------|------|--------|------|
+| MS-01 | 双源端到端一致性（双写 UPDATE/DELETE/PK 变更 → 聚合目标逐行一致） | 聚合目标数据与各源单独部署一致；逐源 verify mismatch=0 | L2/L3 | 35 组（E1） | ✅-L3 |
+| MS-02 | 双源同时首启全量并发 → 交接正确 | 两源各自快照完成、增量起点正确、零丢失 | L2 | 35 组（E2） | ✅-L3 |
+| MS-03 | 全量中杀进程 → 重启重扫/续扫 | 会话失配表整表重扫、done 表不重跑；终态收敛 | L2/L3 | 46 组（E3） | ✅-L3 |
+| MS-04 | 某源源库宕机隔离与恢复 | 仅该源 failed+退避重试，其余源无中断；恢复后自动加入续传（D5） | L3 | 46 组（E5） | ✅-L3 |
+| MS-05 | 跨源 DDL 冻结半径 | 源 A DDL pending 只冻结源 A，源 B 继续推进；approve 走 /sources/{sid}/ddl；记录带 source 字段（E6） | L2 | 35 组 | ✅-L3 |
+| MS-06 | 逐源 pause/resume + 暂停期增量冻结/补投 | 暂停只影响该源；恢复后积压补投（E7） | L2 | 35 组 | ✅-L3 |
+| MS-07 | 逐源位点回拨重放 | 回拨只影响该源；重放幂等收敛 verify=0（E8） | L2 | 35 组 | ✅-L3 |
+| MS-08 | 逐源 restock | 只重扫该源该表，其他源与其他表不动（E9） | L2 | 35 组 | ✅-L3 |
+| MS-09 | MQ 双源：topic 不相交（V4 拦死）+ envelope source 字段 + 各自保序 | 前缀不同不冲突；消息带 source=src-a；(topic,event_id) 去重成立（E10） | L2 | 35 组 | ✅-L3 |
+| MS-10 | 背压隔离（分目标库：停 dst → 仅 src-a 反压/failed，src-b 不受影响） | 无背压传导；dst 恢复后 src-a 自愈（E11） | L3 | 46 组 | ✅-L3 |
+| MS-11 | 配置校验 V1~V6：源数上限/id 规则/v1-v2 双写/跨源目标冲突/server_id 冲突/继承合并 | 全分支拒启或通过；v1 自动包装 default | L1+L3 | config 表驱动（multi_source_test.go）+ 35 组脚本分支 | ✅ |
+| MS-12 | v1 配置零修改升级 + etcd 键迁移幂等 + 位点连续 | 自动包装 default；旧键 CAS 搬到 sources/default/；完成标记；二次启动不重搬；增量续传（E12） | L2 | 46 组 | ✅-L3 |
+| MS-13 | 旧 leader 位点写拒绝（协调面失联 → gate 消失 → 熔断） | 双源管线停（安全态）；恢复重启后零丢失续传（E13） | L3 | 46 组 | ✅-L3 |
+| MS-14 | API 兼容层：单源旧路由等价别名 / 多源 400 指引 / /sources 清单 / 审计 source 字段 / 未知 sid 404 / restock 409（standby） | PRD 06 §1.4 全表 | L1+L3 | api multi_source_test.go + 35 组 | ✅ |
+| MS-15 | server_id 按 node_id:sid 派生互异；schema 缓存/transformer 按源实例隔离 | 双 dump 连接并存不互踢；双源持续同步 | L1+L3 | identity 单测 + 35 组 | ✅ |
+| MS-16 | 指标 label：源私有指标带 source、cluster 级（leader/etcd）不带；gocdc_sources/gocdc_source_up | PRD 07 §1 全清单 | L1+L3 | metrics 单测 + 35 组 | ✅ |
+| MS-17 | 旧断言适配：源级失败不再进程退出（A4/A5a/A7 改源 failed(startup)+存活+退避）；etcd 直写键适配 v2（position/stock 下沉 sources/default/） | D5 语义变化如实反映在既有组 | L3 | 10/30/65/70 组适配 | ✅-L3 |
+
+**MS 轮实证抓到的真问题（已修复）**：
+1. **SourceDeps 静态字段 nil panic**（35 组首轮）：Web 启动与源装配并发，构造期快照的
+   Gate/Rules/DDLLister 为 nil 且永不更新 → DDL approve nil deref panic（gin Recovery 兜 500）。
+   修复=改惰性闭包 + handler 409 nil-guard（PRD 06 §1.5 边角同类）。
+2. **leader 流程早退**（P2 冒烟）：runLeaderFlow 启动完源流程即返回，defer 立即清
+   leading/leadCtxRef → 延迟就绪源与 pause→resume 永远无法启动。修复=leader 流程阻塞至
+   任期结束（任期态存活整届）。
+
 ## 8. MQ sink（MQ）
 
 | ID | 场景 | 预期 | 层级 | 自动化 | 状态 |

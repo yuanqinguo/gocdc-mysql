@@ -249,7 +249,7 @@ func (w *Worker) convertRows(u *EventUnit, meta *model.TableMeta, rule *model.Ru
 			var ce *transform.ConvertError
 			if errors.As(err, &ce) && ce.IsFailEvent() && w.met != nil {
 				// fail_event 转换错误不可重试 → PAUSED + 告警
-				w.met.PipelinePaused.WithLabelValues(u.Schema, u.Table, "convert").Set(1)
+				w.met.PipelinePaused.WithLabelValues(w.sourceID, u.Schema, u.Table, "convert").Set(1)
 			}
 			return fmt.Errorf("pipeline: %s.%s 行转换失败: %w", u.Schema, u.Table, err)
 		}
@@ -257,7 +257,7 @@ func (w *Worker) convertRows(u *EventUnit, meta *model.TableMeta, rule *model.Ru
 			w.lastEventTs.Store(int64(u.Ts))
 		}
 		if w.met != nil {
-			w.met.EventsIn.WithLabelValues(u.Schema, u.Table, string(evType)).Inc()
+			w.met.EventsIn.WithLabelValues(w.sourceID, u.Schema, u.Table, string(evType)).Inc()
 		}
 		w.batch = append(w.batch, ev)
 		w.seqs = append(w.seqs, u.Seq)
@@ -300,7 +300,7 @@ func (w *Worker) flush(ctx context.Context) error {
 		}
 		attempt++
 		if w.met != nil {
-			w.met.SinkRetryTotal.WithLabelValues(w.sn.Name()).Inc()
+			w.met.SinkRetryTotal.WithLabelValues(w.sourceID, w.sn.Name()).Inc()
 		}
 		if attempt == 1 || attempt%10 == 0 {
 			w.log.Warn("sink 发送失败，退避重试（批保留不清空）",
@@ -325,7 +325,7 @@ func (w *Worker) flush(ctx context.Context) error {
 func (w *Worker) failFlush(err error) error {
 	if w.met != nil && len(w.batch) > 0 {
 		first := w.batch[0]
-		w.met.PipelinePaused.WithLabelValues(first.Database, first.Table, "sink").Set(1)
+		w.met.PipelinePaused.WithLabelValues(w.sourceID, first.Database, first.Table, "sink").Set(1)
 	}
 	return fmt.Errorf("pipeline: sink 发送失败（批 %d 事件，不可恢复）: %w", len(w.batch), err)
 }
@@ -462,7 +462,7 @@ func (w *Worker) pauseOnDDL(ctx context.Context, u *EventUnit, rec DDLRecord, sc
 		w.forceSave()
 	}
 	if w.met != nil {
-		w.met.PipelinePaused.WithLabelValues(schemaName, tableName, "ddl").Set(1)
+		w.met.PipelinePaused.WithLabelValues(w.sourceID, schemaName, tableName, "ddl").Set(1)
 	}
 	if w.ddlHooks == nil || w.ddlHooks.Gate == nil {
 		w.log.Warn("DDL 暂停（无审批 gate，管线停止）",

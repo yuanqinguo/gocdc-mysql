@@ -108,3 +108,30 @@ func (a *app) closeSourceComponents(src *sourceState) {
 		b.srcDB.Close()
 	}
 }
+
+// metricsLoop 多源聚合指标（PRD 07 §1）：gocdc_sources{state} 按装配态计数、
+// gocdc_source_up{source} 逐源就绪度。5s 周期（/status 轮询同量级）。
+func (a *app) metricsLoop(ctx context.Context) {
+	update := func() {
+		counts := map[string]int{"ready": 0, "failed": 0, "starting": 0}
+		for _, src := range a.sources.all() {
+			phase := srcPhaseName(src.phase.Load())
+			counts[phase]++
+			a.met.SourceUp.WithLabelValues(src.sid).Set(map[bool]float64{true: 1, false: 0}[phase == "ready"])
+		}
+		for state, n := range counts {
+			a.met.Sources.WithLabelValues(state).Set(float64(n))
+		}
+	}
+	update()
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			update()
+		}
+	}
+}

@@ -10,7 +10,12 @@ import (
 
 // effectiveRulesOf GET 源作用域规则编译产物（每表合并生效视图）。
 func effectiveRulesOf(sd *SourceDeps, c *gin.Context) {
-	views := sd.Rules.EffectiveRules()
+	rules := sd.Rules()
+	if rules == nil { // 源数据面未装配：显式报错（防 nil deref panic）
+		abort(c, 409, "该源组件未就绪（装配中或装配失败，稍后重试或查看日志）")
+		return
+	}
+	views := rules.EffectiveRules()
 	out := make([]EffectiveRule, 0, len(views))
 	for _, v := range views {
 		out = append(out, EffectiveRule{

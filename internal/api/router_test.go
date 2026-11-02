@@ -90,7 +90,9 @@ func testDeps() (Deps, *fakeGate) {
 	store := position.NewStore(nil, "/p", "", 0)
 	gate := &fakeGate{}
 	sd := &SourceDeps{
-		ID: config.DefaultSourceID, Store: store, Rules: mustRules(), Gate: gate,
+		ID: config.DefaultSourceID, Store: store,
+		Rules: func() *pipeline.CompiledRules { return mustRules() },
+		Gate:  func() pipeline.DDLGate { return gate },
 	}
 	deps := Deps{
 		Version: "test", Cluster: "c1", NodeID: "n1",
@@ -283,7 +285,7 @@ func TestRouter_WriteConfirm(t *testing.T) {
 
 func TestRouter_EffectiveRules(t *testing.T) {
 	deps, _ := testDeps()
-	_ = defaultSD(deps).Rules.Match("db1", "t1") // 预热编译视图缓存
+	_ = defaultSD(deps).Rules().Match("db1", "t1") // 预热编译视图缓存
 	r := NewRouter(deps, AuthConfig{Username: "admin", Password: "pw"})
 	req := httptest.NewRequest("GET", "/api/v1/rules/effective", nil)
 	req.SetBasicAuth("admin", "pw")
@@ -321,7 +323,7 @@ func TestRouter_EffectiveRulesRedactMaskSecrets(t *testing.T) {
 	}
 	_ = compiled.Match("db1", "admin_user")
 	deps, _ := testDeps()
-	defaultSD(deps).Rules = compiled
+	defaultSD(deps).Rules = func() *pipeline.CompiledRules { return compiled }
 	r := NewRouter(deps, AuthConfig{Username: "admin", Password: "pw"})
 	req := httptest.NewRequest("GET", "/api/v1/rules/effective", nil)
 	req.SetBasicAuth("admin", "pw")
@@ -344,7 +346,7 @@ func TestRouter_EffectiveRulesRedactMaskSecrets(t *testing.T) {
 
 func TestRouter_ListEndpointsReturnEmptyArrays(t *testing.T) {
 	deps, _ := testDeps()
-	defaultSD(deps).DDLLister = nilDDLLister{}
+	defaultSD(deps).DDLLister = func() pipeline.DDLLister { return nilDDLLister{} }
 	deps.Audit = nilAuditSink{}
 	r := NewRouter(deps, AuthConfig{Username: "admin", Password: "pw"})
 

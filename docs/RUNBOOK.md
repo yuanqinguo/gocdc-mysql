@@ -1,9 +1,17 @@
 # gocdc 运维手册（Runbook）
 
-> 完整 SLA/拓扑/参数速查见 docs/arch/；本文只写故障处置动作。**全部运维操作
-> 经 admin Web（`/api/v1`，HTTP Basic 单用户名密码 + confirm）**——不提供 CLI
-> 子命令（Docker 部署下不应要求进节点执行命令；`-h` 只剩服务模式 flag）。
-> 个别无 Web 界面的操作（如手工播种位点）用 etcdctl 直接写对应 key。
+> 完整 SLA/拓扑/参数速查见 docs/arch/；多源设计见 docs/prd/。本文只写故障处置
+> 动作。**全部运维操作经 admin Web（`/api/v1`，HTTP Basic 单用户名密码 +
+> confirm）**——不提供 CLI 子命令（Docker 部署下不应要求进节点执行命令；
+> `-h` 只剩服务模式 flag）。个别无 Web 界面的操作（如手工播种位点）用
+> etcdctl 直接写对应 key。
+>
+> **多源部署（配置 v2 `sources[]`）**：源级操作一律走 `/api/v1/sources/{sid}/...`
+>（位点回拨/restock/DDL 审批/暂停恢复/verify 全部按源）；旧路由仅单源（v1
+> 包装 default）部署可用（等价别名，弃用窗口 ≥ 2 个小版本），多源部署调用旧
+> 路由返回 400 指引。etcd 直写键全部下沉一层：
+> `/gocdc/{cluster}/sources/{sid}/position|stock/*|pipeline-pause|events/ddl/*`。
+> 单源 v1 部署升级后 sid 恒为 `default`。
 
 ## 0. 日常检查
 - Grafana `gocdc-overview`：leader 状态、事件延迟、位点滞后、暂停规则、DLQ 计数。
@@ -50,3 +58,47 @@ sink 配置变更 + 暂停 → 切换 → 恢复。位点不受影响。
 
 ## 8. 发布前置检查
 无暂停规则；lag < 阈值；旧实例已停（server_id 冲突互踢）。
+
+## 9. 多源运维（配置 v2 sources[]）
+
+### 9.1 多源配置变更 / 新增源
+1. 改 etcd `/gocdc/{cluster}/config`（v2 YAML：`sources[]` 数组）→ 滚动重启
+   生效（不热更，现行口径）。
+2. 新增源 = 配置加一项 + 重启：新源首启自动全量，其余源照常（各源独立全量，
+   不存在「等最慢源」屏障）。
+3. 跨源目标不相交在启动校验期拦死（MySQL 三元组/Kafka topic/RocketMQ topic
+   冲突即拒启）——两个源写同一个 topic/目标表属配置错误。
+4. 同一源实例被两个源订阅：server_id 必须显式互异（校验强制），否则互踢。
+
+### 9.2 单源故障处置
+- 定位：`/status` sources[] 或 `gocdc_source_up{source}=0` / `gocdc_sources{state="failed"}`。
+- 处置：进入该源单源视图按 §1~§7 流程操作，路由带 `/sources/{sid}`；
+  其余源不受影响（失败隔离，D5）。
+- 某源源库主从切换：GTID 模式自动续传；file:pos 停该源（其他源不停——
+  整进程重启仍会全部源同时进入切换窗口，需绝对隔离见多 cluster 形态）。
+
+### 9.3 etcd 键迁移回滚（v2 降级到旧版本二进制）
+旧版本代码只认旧键；迁移后降级会「丢」位点（旧键已删）。回滚三步：
+1. 停进程；
+2. `etcdctl get /gocdc/{cluster}/sources/default/position --print-value-only`
+   确认现行位点；
+3. `etcdctl put /gocdc/{cluster}/position <上述值>`（手工搬回；stock 与 DDL
+   门同理，DDL 门通常量少可只搬 pending 记录）→ 换回旧二进制启动。
+位点值结构（model/position.go）与快照标记结构跨版本不变，搬回即可用。
+
+### 9.4 升级检查单（v1 → 多源就绪）
+1. 新二进制 + 现行 v1 配置启动一次：日志出现 `etcd_keys_migrated`（键迁移
+   完成，旧 position/stock/DDL 键搬到 sources/default/）。
+2. 指标出现 `source="default"` label（源私有指标 label 化；告警查询同步
+   更新——不带 source 的选择器仍命中，sum 类聚合不受影响）。
+3. Web 顶栏出现源选择器（多源时；单源隐藏）。
+
+### 9.5 容量规划（部署 checklist）
+- 源数上限 64（配置校验硬上限）。
+- 目标 MySQL 连接 = Σ 各源 max_open_conns（指向同一实例时全部落同一实例，
+  目标库 max_connections 按合计规划）。
+- 源库连接 = 每源 `4 + stock.workers`（打向各自源库）。
+- GOMEMLIMIT 建议 `N × 150MB + 100MB` 起步；单源内存上界 ≈ 现行单集群，
+  进程上界 ≈ N × 单源 + 共享面（数十 MB）。
+- leader 切换/重启：全部源同时进入切换窗口（每源中断 ≈ 单次切换窗口，
+  同时发生）——需错峰的场景保留多 cluster 形态共存。

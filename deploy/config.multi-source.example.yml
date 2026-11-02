@@ -1,0 +1,90 @@
+# 多源演示配置（docker-compose.multi-source.yml 挂载形态）：
+# 单进程双源——src-a（订单源 msa）+ src-b（用户源 msb）聚合写入 mysql-dst
+# 的 ms_merged 库（不同表，V4 跨源目标不相交校验保证不撞表）。
+config_version: 2
+cluster: ms-demo
+
+node: {}
+
+ha:
+  lease_ttl_seconds: 10
+  leader_check_interval_ms: 2000
+  resign_on_shutdown: true
+
+pipeline:
+  workers: 4
+  worker_queue_size: 8192
+  batch_size: 500
+
+stock:
+  lock_mode: auto
+  chunk_rows: 5000
+  throttle_ms: 0
+  workers: 4
+
+sources:
+  - id: src-a
+    source:
+      addr: mysql-src-a:3306
+      user: root
+      password: "123456"
+      charset: utf8mb4
+      flavor: mysql
+      timezone: UTC
+      exclude_schemas: [mysql, sys, information_schema, performance_schema]
+      use_gtid: true
+    targets:
+      mysql:
+        enabled: true
+        addr: mysql-dst:3306
+        user: root
+        password: "123456"
+        charset: utf8mb4
+        max_open_conns: 10
+        tx_chunk_rows: 500
+        target_database: ms_merged
+        ddl_sync: true
+    rules:
+      - schema: msa
+        sinks: {mysql: true}
+        ddl_policy: pause
+        tables:
+          - {table: orders, order_by_column: id, do_stock: true}
+
+  - id: src-b
+    source:
+      addr: mysql-src-b:3306
+      user: root
+      password: "123456"
+      charset: utf8mb4
+      flavor: mysql
+      timezone: UTC
+      exclude_schemas: [mysql, sys, information_schema, performance_schema]
+      use_gtid: true
+    targets:
+      mysql:
+        enabled: true
+        addr: mysql-dst:3306
+        user: root
+        password: "123456"
+        charset: utf8mb4
+        max_open_conns: 10
+        tx_chunk_rows: 500
+        target_database: ms_merged
+        ddl_sync: true
+    rules:
+      - schema: msb
+        sinks: {mysql: true}
+        ddl_policy: pause
+        tables:
+          - {table: users, order_by_column: id, do_stock: true}
+
+observability:
+  metrics_addr: ":9595"
+  web:
+    enabled: true
+    addr: ":8060"
+    username: admin
+    password: ${GOCDC_WEB_PASSWORD}
+  log:
+    level: info
