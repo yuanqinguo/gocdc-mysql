@@ -143,6 +143,7 @@ export function AppLayout() {
             ))}
           </nav>
           <div className="nav-side">
+            <SourceScopePicker />
             {pipeline && <Chip tone={pipeline.tone} dot>{pipeline.label}</Chip>}
             {status && <span className="nav-side-node">任期 {status.term || 0}</span>}
           </div>
@@ -150,7 +151,6 @@ export function AppLayout() {
       </header>
 
       <main className="shell-main">
-        <SourceScopePicker />
         <div className="page-container"><Outlet /></div>
       </main>
 

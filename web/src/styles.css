@@ -3690,27 +3690,46 @@ a {
 
 /* ── 多源：源作用域选择器 / 聚合视图 ───────────────────────────────── */
 
-/* 常驻选择器（多源部署）：聚合/单源视图下拉一步互切，选项带状态点 */
+/* 常驻选择器（多源部署，nav-side 内）：字号对齐主导航，聚合/单源视图一步互切 */
 .source-picker {
   display: flex;
+  flex-shrink: 0;
   align-items: center;
-  gap: 6px;
-  margin: 0 0 10px;
-  font-size: 12px;
+  gap: 7px;
 }
 
 .source-picker-label {
-  color: var(--text-3);
-  letter-spacing: 0.08em;
-  white-space: nowrap;
+  color: var(--text-4);
+  font-family: var(--font-mono, monospace);
+  font-size: 8px;
+  letter-spacing: 0.14em;
 }
 
 .source-picker-select {
-  font-family: var(--font-mono, monospace);
+  min-width: 84px;
+  font-size: 12px;
+}
+
+.source-picker-select.ant-select:not(.ant-select-customize-input) .ant-select-selector {
+  padding-inline: 8px;
+  background: transparent !important;
+  border-color: transparent !important;
+}
+
+.source-picker-select.ant-select:not(.ant-select-customize-input):hover .ant-select-selector {
+  background: rgba(255, 255, 255, 0.04) !important;
 }
 
 .source-picker-select .ant-select-selection-item {
-  padding-inline-end: 0 !important;
+  padding-inline-end: 14px !important;
+  color: var(--text-2);
+  font-family: var(--font-mono, monospace);
+  line-height: 26px;
+}
+
+.source-picker-select .ant-select-arrow {
+  color: var(--text-4);
+  margin-inline-start: -18px;
 }
 
 /* 聚合视图汇总条 */
