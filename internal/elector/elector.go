@@ -248,7 +248,7 @@ func (e *Elector) leadUntilLost(ctx context.Context, sess *concurrency.Session, 
 			// 不设超时则 leader 长期不失位、管线照常投递（违反 03 §4.2-1
 			// 「分区 → 复核失败 → TTL 内立即停管线」）。超时即视为复核失败 → OnLost。
 			cctx, cancel := context.WithTimeout(ctx, e.checkTimeout())
-			reason := e.verifyLeadership(cctx, sess, election)
+			reason := e.verifyLeadership(cctx, sess.Lease(), string(election.Key()))
 			cancel()
 			if reason != "" {
 				return reason
@@ -274,8 +274,8 @@ func (e *Elector) checkTimeout() time.Duration {
 // 已删 key）；leader 指针 key 须仍指向本节点——缺失/易主时用当选 lease 重写
 // （自愈：位点写门槛以该 key 的 lease 为锚，指针丢失 = 全集群位点写被拒瘫痪）。
 // 失败返回原因，成功返回空。
-func (e *Elector) verifyLeadership(ctx context.Context, sess *concurrency.Session, election *concurrency.Election) string {
-	resp, err := e.cli.Get(ctx, string(election.Key()))
+func (e *Elector) verifyLeadership(ctx context.Context, leaseID clientv3.LeaseID, electionKey string) string {
+	resp, err := e.cli.Get(ctx, electionKey)
 	if err != nil {
 		return "etcd_error: " + err.Error()
 	}
@@ -293,7 +293,7 @@ func (e *Elector) verifyLeadership(ctx context.Context, sess *concurrency.Sessio
 		return "" // etcd 瞬态：不据此失位（election key 归属仍成立）
 	}
 	if len(lp.Kvs) == 0 || string(lp.Kvs[0].Value) != e.opts.NodeID {
-		if _, perr := e.cli.Put(ctx, e.leaderKey(), e.opts.NodeID, clientv3.WithLease(sess.Lease())); perr != nil {
+		if _, perr := e.cli.Put(ctx, e.leaderKey(), e.opts.NodeID, clientv3.WithLease(leaseID)); perr != nil {
 			e.log.Warn("leader 指针自愈重写失败（下一周期重试）", zap.Error(perr))
 		} else {
 			e.log.Warn("leader 指针缺失/易主，已重写自愈", zap.String("key", e.leaderKey()))
