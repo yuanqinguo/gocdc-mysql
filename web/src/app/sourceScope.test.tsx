@@ -133,13 +133,13 @@ describe('AppLayout source scope picker', () => {
     renderLayout(['only-db'], '/?source=only-db')
     await screen.findByText('页面内容')
     await waitFor(() => expect(screen.queryByText('全部源')).not.toBeInTheDocument())
-    expect(screen.queryByText('源', { selector: '.source-picker-label' })).not.toBeInTheDocument()
+    expect(screen.queryByText('数据源', { selector: '.source-picker-label' })).not.toBeInTheDocument()
   })
 
   it('switches scope in place from both the aggregate and a single-source view', async () => {
     const { container } = renderLayout(['order-db', 'user-db'])
     await screen.findByText('页面内容')
-    await waitFor(() => expect(screen.getByText('源', { selector: '.source-picker-label' })).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('数据源', { selector: '.source-picker-label' })).toBeInTheDocument())
 
     const user = userEvent.setup()
     // 聚合视图 → 直选源

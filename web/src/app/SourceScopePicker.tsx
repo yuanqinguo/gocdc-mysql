@@ -25,7 +25,7 @@ export function SourceScopePicker() {
   if (sourceCount < 2) return null
   return (
     <div className="source-picker">
-      <span className="source-picker-label">源</span>
+      <span className="source-picker-label">数据源</span>
       <Select
         size="small"
         variant="borderless"
