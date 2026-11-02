@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -114,7 +115,8 @@ func run(opts *options) error {
 	logging.L().Info("配置加载完成",
 		logging.Event(logging.EventConfigLoaded),
 		zap.String("cluster", cfg.Cluster),
-		zap.Int("rules", len(cfg.Rules)),
+		zap.Int("sources", len(cfg.Sources)),
+		zap.String("source_ids", strings.Join(cfg.SourceIDs(), ",")),
 		zap.String("source", configSourceLabel(st)),
 	)
 
@@ -140,17 +142,17 @@ func run(opts *options) error {
 	defer closeCoord()
 
 	// ⑥ 源库连接 + 启动检查（fail-fast）
-	srcDB, err := openSourceDB(cfg)
+	srcDB, err := openSourceDB(cfg.Single())
 	if err != nil {
 		return err
 	}
 	defer srcDB.Close()
-	if err := checkSource(ctx, cfg, srcDB); err != nil {
+	if err := checkSource(ctx, cfg.Single(), srcDB); err != nil {
 		return err
 	}
 
 	// ⑦ 组件装配 + 目标表结构核对（05 §5.1.4）+ DDL hooks
-	comp, closeSinks, err := buildComponents(ctx, cfg, kv, coord.prefix, srcDB, met)
+	comp, closeSinks, err := buildComponents(ctx, cfg, cfg.Single(), kv, coord.prefix, srcDB, met)
 	if err != nil {
 		return err
 	}

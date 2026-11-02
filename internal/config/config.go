@@ -7,28 +7,131 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"regexp"
 )
 
 // Config 全量配置根（etcd 单 key，正文 YAML）。
 //
-// 加载链路（Load）：原始 YAML → ${ENV} 解析 → 反序列化 → ApplyDefaults（0 值填默认）
-// → Validate（严格校验，全部错误一次报出）。因此字段注释中的「0 = 默认 X」
-// 均指省略/填 0 时由 ApplyDefaults 填充。
+// 加载链路（Load）：原始 YAML → ${ENV} 解析 → v1→v2 规范化（顶层
+// source/targets/rules 自动包装为 sources[default]）→ 反序列化 →
+// ApplyDefaults（源级覆盖合并 + 0 值填默认）→ Validate（严格校验，全部错误
+// 一次报出）。因此字段注释中的「0 = 默认 X」均指省略/填 0 时由
+// ApplyDefaults 填充。
 type Config struct {
 	Cluster string `json:"cluster"` // 必须等于 -cluster flag；flag 是 etcd key 前缀唯一来源（03 §3.1 裁决）
 
 	Node Node `json:"node"`
 
-	Source   Source   `json:"source"`   // 源库：binlog 从哪来
-	HA       HA       `json:"ha"`       // 多副本选主
-	Pipeline Pipeline `json:"pipeline"` // 解析/攒批/发送并行度
-	Targets  Targets  `json:"targets"`  // 下游：数据写到哪（可同时启用多个）
-	Rules    []Rule   `json:"rules"`    // 同步规则：哪个库（哪张表）写到哪些下游
+	HA       HA       `json:"ha"`       // 多副本选主（cluster 级）
+	Pipeline Pipeline `json:"pipeline"` // 管线参数：集群级默认模板，源可逐项覆盖（见 SourceSpec）
+	Stock    Stock    `json:"stock"`    // 全量参数：集群级默认模板，源可逐项覆盖
 
-	Stock Stock `json:"stock"` // 全量初始化参数（06；全部有安全默认，可整节约略）
+	Sources []SourceSpec `json:"sources"` // ★ 同步源数组（多源 PRD 03）：1..64 条，每源独立连接/规则/下游/状态
 
-	Observability Observability `json:"observability"` // 端口与日志
+	Observability Observability `json:"observability"` // 端口与日志（进程级端点，cluster 共享）
 }
+
+// SourceSpec 一条同步源（多源 PRD 03 §1）：现行单源集群全部数据面配置的
+// 打包——源库连接 + 规则 + 下游 + 管线/全量参数。pipeline/stock 为覆盖补丁
+//（nil = 全继承集群默认；非 nil 时未给字段逐项继承，见 ResolvePipeline）。
+//
+// Load/ApplyDefaults 之后 Pipeline/Stock 恒非 nil 且已是合并完整值——校验与
+// 运行时看到的每个源都是完整值，与现行单源视角一致。
+type SourceSpec struct {
+	ID      string   `json:"id"`      // 源标识（source_id/sid）：^[a-z][a-z0-9_-]{1,31}$，cluster 内唯一；etcd key 段/指标 label/API 路径/日志/envelope 共用
+	Source  Source   `json:"source"`  // 源库连接（现行 Source 块原样下沉）
+	Targets Targets  `json:"targets"` // 该源独立下游（独立连接池/生产者，不跨源共享）
+	Rules   []Rule   `json:"rules"`   // 规则组（作用域收敛到该源：schema 源内唯一即可）
+
+	Pipeline *Pipeline `json:"pipeline,omitempty"` // 管线参数覆盖补丁（Load 后为合并完整值）
+	Stock    *Stock    `json:"stock,omitempty"`    // 全量参数覆盖补丁（Load 后为合并完整值）
+}
+
+// SourceIDRe 源 id 字符集（多源 PRD 03 §1.2）：小写字母开头，总长 2~32，
+// 与 cluster/topic 前缀字符集风格一致。
+var SourceIDRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{1,31}$`)
+
+// DefaultSourceID v1 配置自动包装与 etcd 键迁移的落点源 id（保留值）。
+const DefaultSourceID = "default"
+
+// ResolvePipeline 合并解析：源覆盖 > 集群默认。字段级语义 = 非零覆盖
+//（与 ApplyDefaults 的「0 值 = 未设」约定一致；结构上 0 值字段本就非法，
+// 不存在「显式 0」的合法用例）。
+func (s *SourceSpec) ResolvePipeline(base Pipeline) Pipeline {
+	out := base
+	if s.Pipeline != nil {
+		o := *s.Pipeline
+		if o.Workers != 0 {
+			out.Workers = o.Workers
+		}
+		if o.WorkerQueueSize != 0 {
+			out.WorkerQueueSize = o.WorkerQueueSize
+		}
+		if o.BatchSize != 0 {
+			out.BatchSize = o.BatchSize
+		}
+		if o.FlushIntervalMS != 0 {
+			out.FlushIntervalMS = o.FlushIntervalMS
+		}
+		if o.PositionSaveIntervalMS != 0 {
+			out.PositionSaveIntervalMS = o.PositionSaveIntervalMS
+		}
+		if o.OnConvertError != "" {
+			out.OnConvertError = o.OnConvertError
+		}
+		if o.DecimalAs != "" {
+			out.DecimalAs = o.DecimalAs
+		}
+		if o.ZeroDatetimeAs != "" {
+			out.ZeroDatetimeAs = o.ZeroDatetimeAs
+		}
+	}
+	return out
+}
+
+// ResolveStock 合并解析：源覆盖 > 集群默认（字段级语义同 ResolvePipeline）。
+func (s *SourceSpec) ResolveStock(base Stock) Stock {
+	out := base
+	if s.Stock != nil {
+		o := *s.Stock
+		if o.LockMode != "" {
+			out.LockMode = o.LockMode
+		}
+		if o.ChunkRows != 0 {
+			out.ChunkRows = o.ChunkRows
+		}
+		if o.ThrottleMS != 0 {
+			out.ThrottleMS = o.ThrottleMS
+		}
+		if o.Workers != 0 {
+			out.Workers = o.Workers
+		}
+	}
+	return out
+}
+
+// FindSource 按 id 查源（装配层/API 路由用；不存在返回 nil）。
+func (c *Config) FindSource(sid string) *SourceSpec {
+	for i := range c.Sources {
+		if c.Sources[i].ID == sid {
+			return &c.Sources[i]
+		}
+	}
+	return nil
+}
+
+// SourceIDs 全部源 id（有序即配置序）。
+func (c *Config) SourceIDs() []string {
+	out := make([]string, 0, len(c.Sources))
+	for i := range c.Sources {
+		out = append(out, c.Sources[i].ID)
+	}
+	return out
+}
+
+// Single 唯一源便捷取用（v1 包装/单源部署；调用方保证 len(Sources) ≥ 1，
+// 校验 V1 已把关）。
+func (c *Config) Single() *SourceSpec { return &c.Sources[0] }
 
 // Node 节点身份。整节可省略：空值运行时自动派生，不参与必填校验。
 // 主要用于多副本部署时在 Web 页面区分「这是哪台节点」。

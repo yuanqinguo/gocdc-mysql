@@ -183,6 +183,47 @@ observability:
 
 ---
 
+## 4.5 多源配置（`sources[]`，配置 v2）
+
+单进程承载多条 MySQL 同步源（多源 PRD）：上面 §4 的单源写法（顶层
+`source/targets/rules`）是 **v1 形态**，加载后自动包装为
+`sources: [{id: "default", ...}]`——行为零变化，老配置不用改。
+
+v2 把 `source/targets/rules` 下沉到 `sources[]` 数组元素；顶层 `pipeline/stock`
+变为**集群级默认模板**，源级同名段是覆盖补丁：
+
+```yaml
+cluster: mall-aggregate
+ha: { lease_ttl_seconds: 10 }
+pipeline: { workers: 4, worker_queue_size: 8192, batch_size: 500 }   # 集群默认
+stock: { lock_mode: auto, chunk_rows: 5000 }
+
+sources:                       # 1..64 条
+  - id: order-center           # 源标识：^[a-z][a-z0-9_-]{1,31}$，cluster 内唯一
+    source: { ... }            # §4 的 source 块原样下沉（该源独立的源库连接）
+    targets: { ... }           # §5 的 targets 块原样下沉（该源独立连接池/生产者）
+    rules: [ ... ]             # §6 的规则组原样下沉（schema 源内唯一即可）
+    pipeline: { workers: 8 }   # 可选覆盖：只覆盖 workers，其余继承集群默认
+  - id: user-center
+    source: { ... }            # 省略 pipeline/stock 段 → 全继承集群默认
+    targets: { ... }
+    rules: [ ... ]
+```
+
+要点：
+
+| 主题 | 规则 |
+|------|------|
+| **id** | 小写字母开头，`[a-z0-9_-]`，总长 2~32；`default` 保留给 v1 包装与键迁移 |
+| **继承** | 源级段省略 = 全继承；段内字段省略 = 该字段继承集群默认；合并后统一填默认值——校验与运行时看到的是每源的完整值 |
+| **v1 双写** | 顶层旧字段与 `sources` 同时出现 → 报错（不允许歧义） |
+| **跨源目标不相交**（校验期拦死） | MySQL：全部源的 effective `(addr, target_database, table)` 三元组全局唯一；Kafka：`(排序后 brokers, effective topic)`；RocketMQ：`(排序后 name_servers, effective topic)`。两源写同一 topic/目标表 = 数据互覆/乱序。跨源写**不同**目标库的同名表不受影响 |
+| **同实例多源** | 两个源 `source.addr` 完全相同且 `server_id` 相同 → 报错（互踢必然发生）；必须显式配置互异 server_id。`server_id` 缺省（0）按 `fnv32a(node_id:sid)` 派生，同进程天然互异 |
+| **每源独立资源** | targets 是每源独立的连接池/生产者（指向同一实例也各建各的池）；目标库 `max_connections` 按全部源合计规划 |
+| **敏感项** | `${ENV}` 占位与 `/config` 打码递归覆盖 `sources[]` 数组元素，机制不变；建议每源独立变量名（如 `ORDER_SRC_PASSWORD`） |
+
+---
+
 ## 5. 完整配置样例（逐段解释）
 
 ```yaml

@@ -22,8 +22,9 @@ import (
 // verifyTargetTables 规则覆盖的 mysql-sink 表逐张核对（列集、源/目标唯一索引集合、
 // 寻址键唯一覆盖、exclude/mask 撞唯一键）；核对清单来自组形态白名单（表清单
 // 编译期静态可知，见下方遍历）。srcDB 形参当前未消费，保留签名以免牵动调用方。
+// 多源：逐源执行（PRD 05 §1，失败只停该源）。
 func verifyTargetTables(ctx context.Context, srcDB *sql.DB, sm *schema.Manager,
-	rules *pipeline.CompiledRules, cfg *config.Config, msink *mysqlsink.Sink) error {
+	rules *pipeline.CompiledRules, spec *config.SourceSpec, msink *mysqlsink.Sink) error {
 
 	type schemaTable struct{ schema, table string }
 	var tables []schemaTable
@@ -35,7 +36,7 @@ func verifyTargetTables(ctx context.Context, srcDB *sql.DB, sm *schema.Manager,
 			tables = append(tables, schemaTable{s, t})
 		}
 	}
-	for _, r := range cfg.Rules {
+	for _, r := range spec.Rules {
 		// 组形态白名单：核对清单编译期静态可知，无需查 information_schema 展开
 		for _, t := range r.Tables {
 			if rules.Match(r.Schema, t.Table) != nil {
@@ -64,7 +65,7 @@ func verifyTargetTables(ctx context.Context, srcDB *sql.DB, sm *schema.Manager,
 		// 缺同名回退会让默认配置启动即「全表不存在」误报
 		targetDB := rule.TargetDatabase
 		if targetDB == "" {
-			targetDB = cfg.Targets.MySQL.TargetDatabase
+			targetDB = spec.Targets.MySQL.TargetDatabase
 		}
 		if targetDB == "" {
 			targetDB = t.schema

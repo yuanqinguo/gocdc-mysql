@@ -16,27 +16,30 @@ import (
 	"gocdc/internal/etcdx"
 )
 
-// validConfig 返回一份合法基线配置，各用例按需变异。
+// validConfig 返回一份合法基线配置（v2 单源形态），各用例按需变异。
 func validConfig() Config {
 	return Config{
 		Cluster: "c1",
-		Source: Source{
-			Addr: "10.0.0.1:3306", User: "repl", Password: "p", Charset: "utf8mb4",
-			Flavor: "mysql", ServerID: 123, Timezone: "Asia/Shanghai",
-			ExcludeSchemas: []string{"mysql", "sys", "information_schema", "performance_schema"},
-		},
-		HA:       HA{LeaseTTLSeconds: 10, LeaderCheckIntervalMS: 2000},
+		HA:      HA{LeaseTTLSeconds: 10, LeaderCheckIntervalMS: 2000},
 		Pipeline: Pipeline{Workers: 4, WorkerQueueSize: 8192, BatchSize: 500, FlushIntervalMS: 200, PositionSaveIntervalMS: 3000},
-		Targets: Targets{
-			MySQL: MySQLOptions{
-				Enabled: true, Addr: "10.0.1.1:3306", User: "w", Password: "p", Charset: "utf8mb4",
-				MaxOpenConns: 20, MaxIdleConns: 5, ConnMaxLifetimeMin: 30, TxChunkRows: 500,
+		Sources: []SourceSpec{{
+			ID: DefaultSourceID,
+			Source: Source{
+				Addr: "10.0.0.1:3306", User: "repl", Password: "p", Charset: "utf8mb4",
+				Flavor: "mysql", ServerID: 123, Timezone: "Asia/Shanghai",
+				ExcludeSchemas: []string{"mysql", "sys", "information_schema", "performance_schema"},
 			},
-		},
-		Rules: []Rule{{
-			Schema: "db1", DDLPolicy: "pause",
-			Sinks:  &RuleSinks{MySQL: RuleSink{Enabled: true}},
-			Tables: []TableRule{{Table: "t1", OrderByColumn: "id", DoStock: boolPtr(true)}},
+			Targets: Targets{
+				MySQL: MySQLOptions{
+					Enabled: true, Addr: "10.0.1.1:3306", User: "w", Password: "p", Charset: "utf8mb4",
+					MaxOpenConns: 20, MaxIdleConns: 5, ConnMaxLifetimeMin: 30, TxChunkRows: 500,
+				},
+			},
+			Rules: []Rule{{
+				Schema: "db1", DDLPolicy: "pause",
+				Sinks:  &RuleSinks{MySQL: RuleSink{Enabled: true}},
+				Tables: []TableRule{{Table: "t1", OrderByColumn: "id", DoStock: boolPtr(true)}},
+			}},
 		}},
 		Observability: Observability{
 			Web:         WebOptions{Enabled: true, Addr: ":8060", Username: "admin", Password: "pw"},
@@ -102,30 +105,30 @@ func TestValidate_TableDriven(t *testing.T) {
 		// ── 全局 ──
 		{"cluster为空", func(c *Config) { c.Cluster = "" }, []string{"cluster"}},
 		{"cluster与flag不一致", func(c *Config) { c.Cluster = "other" }, []string{"不一致"}},
-		{"rules为空", func(c *Config) { c.Rules = nil }, []string{"rules 不能为空"}},
-		{"无target启用", func(c *Config) { c.Targets.MySQL.Enabled = false }, []string{"至少启用一个下游"}},
+		{"rules为空", func(c *Config) { c.Sources[0].Rules = nil }, []string{"rules 不能为空"}},
+		{"无target启用", func(c *Config) { c.Sources[0].Targets.MySQL.Enabled = false }, []string{"至少启用一个下游"}},
 		// ── source ──
-		{"source.addr为空", func(c *Config) { c.Source.Addr = "" }, []string{"source.addr"}},
-		{"source.addr无端口", func(c *Config) { c.Source.Addr = "10.0.0.1" }, []string{"source.addr"}},
-		{"source.user为空", func(c *Config) { c.Source.User = "" }, []string{"source.user"}},
-		{"source.charset为空", func(c *Config) { c.Source.Charset = "" }, []string{"source.charset"}},
-		{"source.timezone为空", func(c *Config) { c.Source.Timezone = "" }, []string{"timezone"}},
+		{"source.addr为空", func(c *Config) { c.Sources[0].Source.Addr = "" }, []string{"source.addr"}},
+		{"source.addr无端口", func(c *Config) { c.Sources[0].Source.Addr = "10.0.0.1" }, []string{"source.addr"}},
+		{"source.user为空", func(c *Config) { c.Sources[0].Source.User = "" }, []string{"source.user"}},
+		{"source.charset为空", func(c *Config) { c.Sources[0].Source.Charset = "" }, []string{"source.charset"}},
+		{"source.timezone为空", func(c *Config) { c.Sources[0].Source.Timezone = "" }, []string{"timezone"}},
 		// server_id=0 合法（缺省由 cmd 层按 node.id 派生，共享配置多副本不冲突）
-		{"flavor非法", func(c *Config) { c.Source.Flavor = "oracle" }, []string{"flavor"}},
+		{"flavor非法", func(c *Config) { c.Sources[0].Source.Flavor = "oracle" }, []string{"flavor"}},
 		{"缺系统库mysql", func(c *Config) {
-			c.Source.ExcludeSchemas = []string{"sys", "information_schema", "performance_schema"}
+			c.Sources[0].Source.ExcludeSchemas = []string{"sys", "information_schema", "performance_schema"}
 		}, []string{`"mysql"`}},
 		{"缺系统库performance_schema", func(c *Config) {
-			c.Source.ExcludeSchemas = []string{"mysql", "sys", "information_schema"}
+			c.Sources[0].Source.ExcludeSchemas = []string{"mysql", "sys", "information_schema"}
 		}, []string{"performance_schema"}},
 		{"系统库重复", func(c *Config) {
-			c.Source.ExcludeSchemas = append(c.Source.ExcludeSchemas, "sys")
+			c.Sources[0].Source.ExcludeSchemas = append(c.Sources[0].Source.ExcludeSchemas, "sys")
 		}, []string{"重复"}},
 		{"source.tls cert无key", func(c *Config) {
-			c.Source.TLS = TLSOptions{Enabled: true, Cert: "a.pem"}
+			c.Sources[0].Source.TLS = TLSOptions{Enabled: true, Cert: "a.pem"}
 		}, []string{"成对", "skip_verify"}},
 		{"source.tls 无CA", func(c *Config) {
-			c.Source.TLS = TLSOptions{Enabled: true}
+			c.Sources[0].Source.TLS = TLSOptions{Enabled: true}
 		}, []string{"skip_verify"}},
 		// ── ha/pipeline ──
 		{"lease_ttl过短", func(c *Config) { c.HA.LeaseTTLSeconds = 1 }, []string{"lease_ttl_seconds"}},
@@ -135,164 +138,164 @@ func TestValidate_TableDriven(t *testing.T) {
 		{"queue_size为0", func(c *Config) { c.Pipeline.WorkerQueueSize = 0 }, []string{"worker_queue_size"}},
 		{"batch_size为0", func(c *Config) { c.Pipeline.BatchSize = 0 }, []string{"batch_size"}},
 		// ── targets.mysql ──
-		{"mysql.addr为空", func(c *Config) { c.Targets.MySQL.Addr = "" }, []string{"mysql.addr"}},
-		{"mysql.max_open_conns为0", func(c *Config) { c.Targets.MySQL.MaxOpenConns = 0 }, []string{"max_open_conns", "max_idle_conns"}},
+		{"mysql.addr为空", func(c *Config) { c.Sources[0].Targets.MySQL.Addr = "" }, []string{"mysql.addr"}},
+		{"mysql.max_open_conns为0", func(c *Config) { c.Sources[0].Targets.MySQL.MaxOpenConns = 0 }, []string{"max_open_conns", "max_idle_conns"}},
 		{"mysql.idle大于open", func(c *Config) {
-			c.Targets.MySQL.MaxIdleConns = 30
+			c.Sources[0].Targets.MySQL.MaxIdleConns = 30
 		}, []string{"max_idle_conns"}},
-		{"mysql.tx_chunk_rows为0", func(c *Config) { c.Targets.MySQL.TxChunkRows = 0 }, []string{"tx_chunk_rows"}},
+		{"mysql.tx_chunk_rows为0", func(c *Config) { c.Sources[0].Targets.MySQL.TxChunkRows = 0 }, []string{"tx_chunk_rows"}},
 		// ── targets.kafka ──
 		{"kafka.brokers为空", func(c *Config) {
-			c.Targets.MySQL.Enabled = false
-			c.Targets.Kafka.Enabled = true
-			c.Targets.Kafka.Brokers = nil
-			c.Targets.Kafka.TopicPrefix = "cdc_"
-			c.Targets.Kafka.OrderBy = "row"
-			c.Targets.Kafka.Compression = "snappy"
-			c.Targets.Kafka.Ack = "all"
-			c.Targets.Kafka.MaxMessageBytes = 1048576
-			c.Rules[0].Sinks = &RuleSinks{Kafka: RuleSink{Enabled: true}}
+			c.Sources[0].Targets.MySQL.Enabled = false
+			c.Sources[0].Targets.Kafka.Enabled = true
+			c.Sources[0].Targets.Kafka.Brokers = nil
+			c.Sources[0].Targets.Kafka.TopicPrefix = "cdc_"
+			c.Sources[0].Targets.Kafka.OrderBy = "row"
+			c.Sources[0].Targets.Kafka.Compression = "snappy"
+			c.Sources[0].Targets.Kafka.Ack = "all"
+			c.Sources[0].Targets.Kafka.MaxMessageBytes = 1048576
+			c.Sources[0].Rules[0].Sinks = &RuleSinks{Kafka: RuleSink{Enabled: true}}
 		}, []string{"brokers"}},
 		{"kafka.broker非法", func(c *Config) {
-			c.Targets.Kafka.Enabled = true
-			c.Targets.Kafka.Brokers = []string{"no-port"}
-			c.Targets.Kafka.TopicPrefix = "cdc_"
-			c.Targets.Kafka.OrderBy = "row"
-			c.Targets.Kafka.Compression = "snappy"
-			c.Targets.Kafka.Ack = "all"
-			c.Targets.Kafka.MaxMessageBytes = 1048576
+			c.Sources[0].Targets.Kafka.Enabled = true
+			c.Sources[0].Targets.Kafka.Brokers = []string{"no-port"}
+			c.Sources[0].Targets.Kafka.TopicPrefix = "cdc_"
+			c.Sources[0].Targets.Kafka.OrderBy = "row"
+			c.Sources[0].Targets.Kafka.Compression = "snappy"
+			c.Sources[0].Targets.Kafka.Ack = "all"
+			c.Sources[0].Targets.Kafka.MaxMessageBytes = 1048576
 		}, []string{"brokers[0]"}},
 		{"kafka.topic_prefix非法", func(c *Config) {
-			c.Targets.Kafka.Enabled = true
-			c.Targets.Kafka.Brokers = []string{"b:9092"}
-			c.Targets.Kafka.TopicPrefix = "cdc !"
-			c.Targets.Kafka.OrderBy = "row"
-			c.Targets.Kafka.Compression = "snappy"
-			c.Targets.Kafka.Ack = "all"
-			c.Targets.Kafka.MaxMessageBytes = 1048576
+			c.Sources[0].Targets.Kafka.Enabled = true
+			c.Sources[0].Targets.Kafka.Brokers = []string{"b:9092"}
+			c.Sources[0].Targets.Kafka.TopicPrefix = "cdc !"
+			c.Sources[0].Targets.Kafka.OrderBy = "row"
+			c.Sources[0].Targets.Kafka.Compression = "snappy"
+			c.Sources[0].Targets.Kafka.Ack = "all"
+			c.Sources[0].Targets.Kafka.MaxMessageBytes = 1048576
 		}, []string{"topic_prefix"}},
 		{"kafka.topic_prefix含点（统一命名不收点，旧 cdc. 前缀须迁移）", func(c *Config) {
-			c.Targets.Kafka.Enabled = true
-			c.Targets.Kafka.Brokers = []string{"b:9092"}
-			c.Targets.Kafka.TopicPrefix = "cdc."
-			c.Targets.Kafka.OrderBy = "row"
-			c.Targets.Kafka.Compression = "snappy"
-			c.Targets.Kafka.Ack = "all"
-			c.Targets.Kafka.MaxMessageBytes = 1048576
+			c.Sources[0].Targets.Kafka.Enabled = true
+			c.Sources[0].Targets.Kafka.Brokers = []string{"b:9092"}
+			c.Sources[0].Targets.Kafka.TopicPrefix = "cdc."
+			c.Sources[0].Targets.Kafka.OrderBy = "row"
+			c.Sources[0].Targets.Kafka.Compression = "snappy"
+			c.Sources[0].Targets.Kafka.Ack = "all"
+			c.Sources[0].Targets.Kafka.MaxMessageBytes = 1048576
 		}, []string{"topic_prefix"}},
 		{"kafka.order_by非法", func(c *Config) {
-			c.Targets.Kafka.Enabled = true
-			c.Targets.Kafka.Brokers = []string{"b:9092"}
-			c.Targets.Kafka.TopicPrefix = "cdc_"
-			c.Targets.Kafka.Compression = "snappy"
-			c.Targets.Kafka.Ack = "all"
-			c.Targets.Kafka.MaxMessageBytes = 1048576
+			c.Sources[0].Targets.Kafka.Enabled = true
+			c.Sources[0].Targets.Kafka.Brokers = []string{"b:9092"}
+			c.Sources[0].Targets.Kafka.TopicPrefix = "cdc_"
+			c.Sources[0].Targets.Kafka.Compression = "snappy"
+			c.Sources[0].Targets.Kafka.Ack = "all"
+			c.Sources[0].Targets.Kafka.MaxMessageBytes = 1048576
 		}, []string{"order_by"}},
 		{"kafka.compression非法", func(c *Config) {
-			c.Targets.Kafka.Enabled = true
-			c.Targets.Kafka.Brokers = []string{"b:9092"}
-			c.Targets.Kafka.TopicPrefix = "cdc_"
-			c.Targets.Kafka.OrderBy = "row"
-			c.Targets.Kafka.Ack = "all"
-			c.Targets.Kafka.MaxMessageBytes = 1048576
+			c.Sources[0].Targets.Kafka.Enabled = true
+			c.Sources[0].Targets.Kafka.Brokers = []string{"b:9092"}
+			c.Sources[0].Targets.Kafka.TopicPrefix = "cdc_"
+			c.Sources[0].Targets.Kafka.OrderBy = "row"
+			c.Sources[0].Targets.Kafka.Ack = "all"
+			c.Sources[0].Targets.Kafka.MaxMessageBytes = 1048576
 		}, []string{"compression"}},
 		{"kafka.max_message_bytes过小", func(c *Config) {
-			c.Targets.Kafka.Enabled = true
-			c.Targets.Kafka.Brokers = []string{"b:9092"}
-			c.Targets.Kafka.TopicPrefix = "cdc_"
-			c.Targets.Kafka.OrderBy = "row"
-			c.Targets.Kafka.Compression = "snappy"
-			c.Targets.Kafka.Ack = "all"
-			c.Targets.Kafka.MaxMessageBytes = 10
+			c.Sources[0].Targets.Kafka.Enabled = true
+			c.Sources[0].Targets.Kafka.Brokers = []string{"b:9092"}
+			c.Sources[0].Targets.Kafka.TopicPrefix = "cdc_"
+			c.Sources[0].Targets.Kafka.OrderBy = "row"
+			c.Sources[0].Targets.Kafka.Compression = "snappy"
+			c.Sources[0].Targets.Kafka.Ack = "all"
+			c.Sources[0].Targets.Kafka.MaxMessageBytes = 10
 		}, []string{"max_message_bytes"}},
 		{"kafka.sasl机制非法", func(c *Config) {
-			c.Targets.Kafka.Enabled = true
-			c.Targets.Kafka.Brokers = []string{"b:9092"}
-			c.Targets.Kafka.TopicPrefix = "cdc_"
-			c.Targets.Kafka.OrderBy = "row"
-			c.Targets.Kafka.Compression = "snappy"
-			c.Targets.Kafka.Ack = "all"
-			c.Targets.Kafka.MaxMessageBytes = 1048576
-			c.Targets.Kafka.SASL = SASLOptions{Enabled: true, Mechanism: "ntlm", User: "u", PasswordEnv: "P"}
+			c.Sources[0].Targets.Kafka.Enabled = true
+			c.Sources[0].Targets.Kafka.Brokers = []string{"b:9092"}
+			c.Sources[0].Targets.Kafka.TopicPrefix = "cdc_"
+			c.Sources[0].Targets.Kafka.OrderBy = "row"
+			c.Sources[0].Targets.Kafka.Compression = "snappy"
+			c.Sources[0].Targets.Kafka.Ack = "all"
+			c.Sources[0].Targets.Kafka.MaxMessageBytes = 1048576
+			c.Sources[0].Targets.Kafka.SASL = SASLOptions{Enabled: true, Mechanism: "ntlm", User: "u", PasswordEnv: "P"}
 		}, []string{"sasl.mechanism"}},
 		{"kafka.sasl密码env非法名", func(c *Config) {
-			c.Targets.Kafka.Enabled = true
-			c.Targets.Kafka.Brokers = []string{"b:9092"}
-			c.Targets.Kafka.TopicPrefix = "cdc_"
-			c.Targets.Kafka.OrderBy = "row"
-			c.Targets.Kafka.Compression = "snappy"
-			c.Targets.Kafka.Ack = "all"
-			c.Targets.Kafka.MaxMessageBytes = 1048576
-			c.Targets.Kafka.SASL = SASLOptions{Enabled: true, Mechanism: "plain", User: "u", PasswordEnv: "9BAD"}
+			c.Sources[0].Targets.Kafka.Enabled = true
+			c.Sources[0].Targets.Kafka.Brokers = []string{"b:9092"}
+			c.Sources[0].Targets.Kafka.TopicPrefix = "cdc_"
+			c.Sources[0].Targets.Kafka.OrderBy = "row"
+			c.Sources[0].Targets.Kafka.Compression = "snappy"
+			c.Sources[0].Targets.Kafka.Ack = "all"
+			c.Sources[0].Targets.Kafka.MaxMessageBytes = 1048576
+			c.Sources[0].Targets.Kafka.SASL = SASLOptions{Enabled: true, Mechanism: "plain", User: "u", PasswordEnv: "9BAD"}
 		}, []string{"password_env"}},
 		// ── targets.rocketmq ──
 		{"rocketmq.name_servers为空", func(c *Config) {
-			c.Targets.MySQL.Enabled = false
-			c.Targets.RocketMQ.Enabled = true
-			c.Targets.RocketMQ.Group = "g1"
-			c.Targets.RocketMQ.TopicPrefix = "CDC_"
-			c.Targets.RocketMQ.OrderBy = "row"
-			c.Rules[0].Sinks = &RuleSinks{RocketMQ: RuleSink{Enabled: true}}
+			c.Sources[0].Targets.MySQL.Enabled = false
+			c.Sources[0].Targets.RocketMQ.Enabled = true
+			c.Sources[0].Targets.RocketMQ.Group = "g1"
+			c.Sources[0].Targets.RocketMQ.TopicPrefix = "CDC_"
+			c.Sources[0].Targets.RocketMQ.OrderBy = "row"
+			c.Sources[0].Rules[0].Sinks = &RuleSinks{RocketMQ: RuleSink{Enabled: true}}
 		}, []string{"name_servers"}},
 		{"rocketmq.group非法", func(c *Config) {
-			c.Targets.RocketMQ.Enabled = true
-			c.Targets.RocketMQ.NameServers = []string{"n:9876"}
-			c.Targets.RocketMQ.TopicPrefix = "CDC_"
-			c.Targets.RocketMQ.OrderBy = "row"
+			c.Sources[0].Targets.RocketMQ.Enabled = true
+			c.Sources[0].Targets.RocketMQ.NameServers = []string{"n:9876"}
+			c.Sources[0].Targets.RocketMQ.TopicPrefix = "CDC_"
+			c.Sources[0].Targets.RocketMQ.OrderBy = "row"
 		}, []string{"group"}},
 		{"rocketmq.send_concurrency超限", func(c *Config) {
-			c.Targets.RocketMQ.Enabled = true
-			c.Targets.RocketMQ.NameServers = []string{"n:9876"}
-			c.Targets.RocketMQ.Group = "g1"
-			c.Targets.RocketMQ.TopicPrefix = "CDC_"
-			c.Targets.RocketMQ.OrderBy = "row"
-			c.Targets.RocketMQ.SendTimeoutMS = 5000
-			c.Targets.RocketMQ.SendConcurrency = 257
+			c.Sources[0].Targets.RocketMQ.Enabled = true
+			c.Sources[0].Targets.RocketMQ.NameServers = []string{"n:9876"}
+			c.Sources[0].Targets.RocketMQ.Group = "g1"
+			c.Sources[0].Targets.RocketMQ.TopicPrefix = "CDC_"
+			c.Sources[0].Targets.RocketMQ.OrderBy = "row"
+			c.Sources[0].Targets.RocketMQ.SendTimeoutMS = 5000
+			c.Sources[0].Targets.RocketMQ.SendConcurrency = 257
 		}, []string{"send_concurrency"}},
 		// ── rules ──
-		{"rule.schema非法字符", func(c *Config) { c.Rules[0].Schema = "a b" }, []string{"schema"}},
-		{"表table非法字符", func(c *Config) { c.Rules[0].Tables[0].Table = "a.b" }, []string{"table"}},
-		{"组缺sinks", func(c *Config) { c.Rules[0].Sinks = nil }, []string{"sinks"}},
+		{"rule.schema非法字符", func(c *Config) { c.Sources[0].Rules[0].Schema = "a b" }, []string{"schema"}},
+		{"表table非法字符", func(c *Config) { c.Sources[0].Rules[0].Tables[0].Table = "a.b" }, []string{"table"}},
+		{"组缺sinks", func(c *Config) { c.Sources[0].Rules[0].Sinks = nil }, []string{"sinks"}},
 		{"sinks全关", func(c *Config) {
-			c.Rules[0].Sinks = &RuleSinks{}
+			c.Sources[0].Rules[0].Sinks = &RuleSinks{}
 		}, []string{"至少启用一个"}},
 		{"mysql sink配topic", func(c *Config) {
-			c.Rules[0].Sinks = &RuleSinks{MySQL: RuleSink{Enabled: true, Topic: "x"}}
+			c.Sources[0].Rules[0].Sinks = &RuleSinks{MySQL: RuleSink{Enabled: true, Topic: "x"}}
 		}, []string{"不接受 topic/tag"}},
 		{"kafka topic非法", func(c *Config) {
-			c.Rules[0].Sinks = &RuleSinks{Kafka: RuleSink{Enabled: true, Topic: "非 法"}}
+			c.Sources[0].Rules[0].Sinks = &RuleSinks{Kafka: RuleSink{Enabled: true, Topic: "非 法"}}
 		}, []string{"sinks.kafka.topic"}},
 		{"kafka topic含点（统一命名不收点，旧覆盖值须迁移）", func(c *Config) {
-			c.Rules[0].Sinks = &RuleSinks{Kafka: RuleSink{Enabled: true, Topic: "cdc.custom"}}
+			c.Sources[0].Rules[0].Sinks = &RuleSinks{Kafka: RuleSink{Enabled: true, Topic: "cdc.custom"}}
 		}, []string{"sinks.kafka.topic"}},
-		{"ddl_policy非法", func(c *Config) { c.Rules[0].DDLPolicy = "drop" }, []string{"ddl_policy"}},
-		{"do_stock缺排序列", func(c *Config) { c.Rules[0].Tables[0].OrderByColumn = "" }, []string{"order_by_column"}},
+		{"ddl_policy非法", func(c *Config) { c.Sources[0].Rules[0].DDLPolicy = "drop" }, []string{"ddl_policy"}},
+		{"do_stock缺排序列", func(c *Config) { c.Sources[0].Rules[0].Tables[0].OrderByColumn = "" }, []string{"order_by_column"}},
 		{"排序列被exclude", func(c *Config) {
-			c.Rules[0].Tables[0].ExcludeColumns = []string{"id"}
+			c.Sources[0].Rules[0].Tables[0].ExcludeColumns = []string{"id"}
 		}, []string{"不可同时出现在 exclude_columns"}},
 		{"排序列被mask", func(c *Config) {
-			c.Rules[0].Tables[0].MaskColumns = map[string]MaskSpec{"id": {Type: "phone"}}
+			c.Sources[0].Rules[0].Tables[0].MaskColumns = map[string]MaskSpec{"id": {Type: "phone"}}
 		}, []string{"不可脱敏"}},
 		{"exclude与mask冲突", func(c *Config) {
-			c.Rules[0].Tables[0].MaskColumns = map[string]MaskSpec{"phone": {Type: "phone"}}
-			c.Rules[0].Tables[0].ExcludeColumns = []string{"phone"}
+			c.Sources[0].Rules[0].Tables[0].MaskColumns = map[string]MaskSpec{"phone": {Type: "phone"}}
+			c.Sources[0].Rules[0].Tables[0].ExcludeColumns = []string{"phone"}
 		}, []string{"语义互斥"}},
 		{"mask算法非法", func(c *Config) {
-			c.Rules[0].Tables[0].MaskColumns = map[string]MaskSpec{"phone": {Type: "rot13"}}
+			c.Sources[0].Rules[0].Tables[0].MaskColumns = map[string]MaskSpec{"phone": {Type: "rot13"}}
 		}, []string{"不在算法集"}},
 		{"truncate缺keep", func(c *Config) {
-			c.Rules[0].Tables[0].MaskColumns = map[string]MaskSpec{"remark": {Type: "truncate"}}
+			c.Sources[0].Rules[0].Tables[0].MaskColumns = map[string]MaskSpec{"remark": {Type: "truncate"}}
 		}, []string{"keep"}},
 		{"组schema重复", func(c *Config) {
-			c.Rules = append(c.Rules, Rule{Schema: "DB1", Sinks: &RuleSinks{MySQL: RuleSink{Enabled: true}},
+			c.Sources[0].Rules = append(c.Sources[0].Rules, Rule{Schema: "DB1", Sinks: &RuleSinks{MySQL: RuleSink{Enabled: true}},
 				Tables: []TableRule{{Table: "t9", DoStock: boolPtr(false)}}})
 		}, []string{"schema 重复"}},
 		{"组内表重复", func(c *Config) {
-			c.Rules[0].Tables = append(c.Rules[0].Tables, TableRule{Table: "T1", DoStock: boolPtr(false)})
+			c.Sources[0].Rules[0].Tables = append(c.Sources[0].Rules[0].Tables, TableRule{Table: "T1", DoStock: boolPtr(false)})
 		}, []string{"重复"}},
-		{"tables为空", func(c *Config) { c.Rules[0].Tables = nil }, []string{"tables 不能为空"}},
-		{"do_stock缺失", func(c *Config) { c.Rules[0].Tables[0].DoStock = nil }, []string{"do_stock 必填"}},
-		{"表通配符", func(c *Config) { c.Rules[0].Tables[0].Table = "*" }, []string{"具体表名"}},
+		{"tables为空", func(c *Config) { c.Sources[0].Rules[0].Tables = nil }, []string{"tables 不能为空"}},
+		{"do_stock缺失", func(c *Config) { c.Sources[0].Rules[0].Tables[0].DoStock = nil }, []string{"do_stock 必填"}},
+		{"表通配符", func(c *Config) { c.Sources[0].Rules[0].Tables[0].Table = "*" }, []string{"具体表名"}},
 		// ── observability ──
 		{"metrics_addr非法", func(c *Config) { c.Observability.MetricsAddr = "9595" }, []string{"metrics_addr"}},
 		{"web.addr非法", func(c *Config) { c.Observability.Web.Addr = "8060" }, []string{"web.addr"}},
@@ -309,18 +312,18 @@ func TestValidate_TableDriven(t *testing.T) {
 // TestValidate_GroupDefaults 组形态默认值：组级 ddl_policy 省略 → pause 安全默认。
 func TestValidate_GroupDefaults(t *testing.T) {
 	c := validConfig()
-	c.Rules[0].DDLPolicy = ""
+	c.Sources[0].Rules[0].DDLPolicy = ""
 	ApplyDefaults(&c)
 	if errs := Validate(&c, "c1"); len(errs) != 0 {
 		t.Fatalf("组级 ddl_policy 省略应默认 pause:\n%v", errs)
 	}
-	if c.Rules[0].DDLPolicy != "pause" {
-		t.Fatalf("ddl_policy 应被填充为 pause: %q", c.Rules[0].DDLPolicy)
+	if c.Sources[0].Rules[0].DDLPolicy != "pause" {
+		t.Fatalf("ddl_policy 应被填充为 pause: %q", c.Sources[0].Rules[0].DDLPolicy)
 	}
 
 	// 表级显式 do_stock=false：只增量不快照（不要求排序列）
 	c = validConfig()
-	c.Rules[0].Tables[0] = TableRule{Table: "t1", DoStock: boolPtr(false)}
+	c.Sources[0].Rules[0].Tables[0] = TableRule{Table: "t1", DoStock: boolPtr(false)}
 	ApplyDefaults(&c)
 	if errs := Validate(&c, "c1"); len(errs) != 0 {
 		t.Fatalf("表级 do_stock=false 合法:\n%v", errs)
@@ -388,13 +391,13 @@ func TestResolveEnv(t *testing.T) {
 	}
 }
 
-// TestApplyDefaults 零值填默认、非零保留。
+// TestApplyDefaults 零值填默认、非零保留（集群默认 + 逐源填充）。
 func TestApplyDefaults(t *testing.T) {
-	c := &Config{}
+	c := &Config{Sources: []SourceSpec{{ID: "s1"}}}
 	ApplyDefaults(c)
-	if c.Source.HeartbeatIntervalMS != 3000 || c.Pipeline.PositionSaveIntervalMS != 3000 ||
-		c.Targets.MySQL.MaxIdleConns != 5 || c.Targets.Kafka.SendTimeoutMS != 5000 ||
-		c.Targets.RocketMQ.SendConcurrency != 32 {
+	if c.Sources[0].Source.HeartbeatIntervalMS != 3000 || c.Pipeline.PositionSaveIntervalMS != 3000 ||
+		c.Sources[0].Targets.MySQL.MaxIdleConns != 5 || c.Sources[0].Targets.Kafka.SendTimeoutMS != 5000 ||
+		c.Sources[0].Targets.RocketMQ.SendConcurrency != 32 {
 		t.Fatalf("默认值填充错误: %+v", c)
 	}
 	c.Pipeline.FlushIntervalMS = 50
@@ -507,11 +510,11 @@ observability:
 	if len(res.Errors) != 0 {
 		t.Fatalf("合法配置不应报错:\n%v", res.Errors)
 	}
-	if res.Config.Source.Password != "srcpw" {
-		t.Fatalf("ENV 解析失败: %q", res.Config.Source.Password)
+	if res.Config.Sources[0].Source.Password != "srcpw" {
+		t.Fatalf("ENV 解析失败: %q", res.Config.Sources[0].Source.Password)
 	}
-	if res.Config.Rules[0].DDLPolicy != "pause" {
-		t.Fatalf("ddl_policy 库级省略应默认 pause，实际 %q", res.Config.Rules[0].DDLPolicy)
+	if res.Config.Sources[0].Rules[0].DDLPolicy != "pause" {
+		t.Fatalf("ddl_policy 库级省略应默认 pause，实际 %q", res.Config.Sources[0].Rules[0].DDLPolicy)
 	}
 
 	// cluster 与 flag 不一致 → fail-fast
@@ -571,16 +574,16 @@ observability:
 	if len(res.Errors) != 0 {
 		t.Fatalf("合法 YAML 配置不应报错:\n%v", res.Errors)
 	}
-	if res.Config.Source.Password != "srcpw" {
-		t.Fatalf("YAML 下 ENV 解析失败: %q", res.Config.Source.Password)
+	if res.Config.Sources[0].Source.Password != "srcpw" {
+		t.Fatalf("YAML 下 ENV 解析失败: %q", res.Config.Sources[0].Source.Password)
 	}
-	if res.Config.Targets.MySQL.MaxIdleConns != 5 || res.Config.Pipeline.FlushIntervalMS != 200 {
+	if res.Config.Sources[0].Targets.MySQL.MaxIdleConns != 5 || res.Config.Pipeline.FlushIntervalMS != 200 {
 		t.Fatalf("YAML 下默认值未填充: idle=%d flush=%d",
-			res.Config.Targets.MySQL.MaxIdleConns, res.Config.Pipeline.FlushIntervalMS)
+			res.Config.Sources[0].Targets.MySQL.MaxIdleConns, res.Config.Pipeline.FlushIntervalMS)
 	}
-	t0 := res.Config.Rules[0].Tables[0]
-	if !res.Config.Rules[0].Sinks.MySQL.Enabled || t0.DoStock == nil || !*t0.DoStock {
-		t.Fatalf("YAML 规则解析错误: %+v", res.Config.Rules[0])
+	t0 := res.Config.Sources[0].Rules[0].Tables[0]
+	if !res.Config.Sources[0].Rules[0].Sinks.MySQL.Enabled || t0.DoStock == nil || !*t0.DoStock {
+		t.Fatalf("YAML 规则解析错误: %+v", res.Config.Sources[0].Rules[0])
 	}
 
 	// 坏 YAML → 单错误且含 yaml 定位信息
@@ -600,7 +603,14 @@ func TestLoad_FromEtcd(t *testing.T) {
 	kv := etcdx.NewKV(&clientv3.Client{KV: fk})
 
 	res := Load(context.Background(), "", "/gocdc/c1/config", "c1", kv)
-	if len(res.Errors) == 0 || !strings.Contains(res.Errors[0].Error(), "rules") {
+	found := false
+	for _, e := range res.Errors {
+		if strings.Contains(e.Error(), "rules") {
+			found = true
+			break
+		}
+	}
+	if len(res.Errors) == 0 || !found {
 		t.Fatalf("etcd 配置应进入校验并报 rules 错误: %v", res.Errors)
 	}
 

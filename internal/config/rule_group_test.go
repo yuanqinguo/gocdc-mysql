@@ -11,7 +11,7 @@ import (
 // 组形态合法基线：组级 sinks/ddl_policy/target_database，表级逐表 order_by/do_stock。
 func TestValidate_GroupRules_Valid(t *testing.T) {
 	errs := runV(t, func(c *Config) {
-		c.Rules = []Rule{{
+		c.Sources[0].Rules = []Rule{{
 			Schema: "edu.mall.admin", DDLPolicy: "auto",
 			Sinks:          &RuleSinks{MySQL: RuleSink{Enabled: true}},
 			TargetDatabase: "edu.mall.merge",
@@ -31,13 +31,13 @@ func TestValidate_GroupRules_Valid(t *testing.T) {
 // 组形态 ddl_policy 缺省 → pause 原地填充（安全默认）。
 func TestValidate_GroupRules_DefaultDDLPolicy(t *testing.T) {
 	c := validConfig()
-	c.Rules[0].DDLPolicy = ""
+	c.Sources[0].Rules[0].DDLPolicy = ""
 	ApplyDefaults(&c)
 	if errs := Validate(&c, "c1"); len(errs) != 0 {
 		t.Fatalf("应零错误: %v", errs)
 	}
-	if c.Rules[0].DDLPolicy != "pause" {
-		t.Fatalf("ddl_policy 缺省应填 pause: %q", c.Rules[0].DDLPolicy)
+	if c.Sources[0].Rules[0].DDLPolicy != "pause" {
+		t.Fatalf("ddl_policy 缺省应填 pause: %q", c.Sources[0].Rules[0].DDLPolicy)
 	}
 }
 
@@ -67,7 +67,7 @@ func TestValidate_GroupRules_Errors(t *testing.T) {
 		{"表级 target_database 非法", group(func(g *Rule) { g.Tables[0].TargetDatabase = "a b" }), "非法字符"},
 	}
 	for _, tc := range cases {
-		errs := runV(t, func(c *Config) { c.Rules = tc.rules })
+		errs := runV(t, func(c *Config) { c.Sources[0].Rules = tc.rules })
 		if len(errs) == 0 {
 			t.Fatalf("%s: 应报错", tc.name)
 		}
@@ -203,7 +203,7 @@ observability:
 	if len(res.Errors) != 0 {
 		t.Fatalf("组形态 YAML 应加载成功: %v", res.Errors)
 	}
-	g := res.Config.Rules[0]
+	g := res.Config.Sources[0].Rules[0]
 	if len(g.Tables) != 2 || g.Tables[0].Table != "admin_user" || g.Tables[1].Table != "users" {
 		t.Fatalf("组表清单解析: %+v", g.Tables)
 	}

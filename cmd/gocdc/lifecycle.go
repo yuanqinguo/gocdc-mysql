@@ -106,30 +106,31 @@ func newApp(opts *options, cfg *config.Config, ctx context.Context,
 
 // newPipeline 按任期构造增量管线（source 每任期新建；其余组件跨任期复用）。
 func (a *app) newPipeline(term int64) *pipeline.Pipeline {
+	spec := a.cfg.Single()
 	return pipeline.New(pipeline.Options{
 		Source: source.New(source.Config{
-			Addr: a.cfg.Source.Addr, User: a.cfg.Source.User, Password: a.cfg.Source.Password,
-			Charset: a.cfg.Source.Charset, Flavor: a.cfg.Source.Flavor, ServerID: a.cfg.Source.ServerID,
-			Timezone: a.tz, UseGTID: a.cfg.Source.UseGTID,
-			HeartbeatInterval: time.Duration(a.cfg.Source.HeartbeatIntervalMS) * time.Millisecond,
-			ReadTimeout:       time.Duration(a.cfg.Source.ReadTimeoutMS) * time.Millisecond,
+			Addr: spec.Source.Addr, User: spec.Source.User, Password: spec.Source.Password,
+			Charset: spec.Source.Charset, Flavor: spec.Source.Flavor, ServerID: spec.Source.ServerID,
+			Timezone: a.tz, UseGTID: spec.Source.UseGTID,
+			HeartbeatInterval: time.Duration(spec.Source.HeartbeatIntervalMS) * time.Millisecond,
+			ReadTimeout:       time.Duration(spec.Source.ReadTimeoutMS) * time.Millisecond,
 		}, logging.L()),
 		SchemaMgr: a.schemaMgr, Transformer: a.transformer,
 		Sink: a.router, Store: a.store, Rules: a.rules,
 		DDLHooks: a.ddlHooks,
 		Metrics:  a.met, Log: logging.L(),
-		Workers:       a.cfg.Pipeline.Workers,
-		QueueSize:     a.cfg.Pipeline.WorkerQueueSize,
-		BatchSize:     a.cfg.Pipeline.BatchSize,
-		FlushInterval: time.Duration(a.cfg.Pipeline.FlushIntervalMS) * time.Millisecond,
-		SaveInterval:  time.Duration(a.cfg.Pipeline.PositionSaveIntervalMS) * time.Millisecond,
+		Workers:       spec.Pipeline.Workers,
+		QueueSize:     spec.Pipeline.WorkerQueueSize,
+		BatchSize:     spec.Pipeline.BatchSize,
+		FlushInterval: time.Duration(spec.Pipeline.FlushIntervalMS) * time.Millisecond,
+		SaveInterval:  time.Duration(spec.Pipeline.PositionSaveIntervalMS) * time.Millisecond,
 		NodeID:        a.nodeID, Term: term, MaxSaveFails: 30,
 		DrainTimeout:   10 * time.Second, // 让位/失联切换 ≈ 排空时间（03 §4.2-4）
-		ExcludeSchemas: a.cfg.Source.ExcludeSchemas,
+		ExcludeSchemas: spec.Source.ExcludeSchemas,
 		MasterPosFn: func(mctx context.Context) (model.Position, error) {
 			return showMasterStatus(mctx, a.srcDB)
 		},
-		Flavor: a.cfg.Source.Flavor,
+		Flavor: spec.Source.Flavor,
 	})
 }
 
@@ -278,7 +279,7 @@ func (a *app) gcLoop(ctx context.Context) {
 // ctx 取消 = 失联/停机（静默退出，defer 清理）；其余失败记错误日志。
 func (a *app) runStock(leadCtx context.Context) (model.Position, error) {
 	stockSvc := stockf.New(a.srcDB, a.schemaMgr, a.transformer, a.router,
-		a.markers, a.cfg.Stock, a.rules, a.met, a.nodeID, logging.L())
+		a.markers, *a.cfg.Single().Stock, a.rules, a.met, a.nodeID, logging.L())
 	stockSvc.SetSchemas(a.ruleSchemas)
 	a.stockSvc.Store(stockSvc)
 	sres, serr := stockSvc.Run(leadCtx)

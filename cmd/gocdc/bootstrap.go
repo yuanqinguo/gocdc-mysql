@@ -153,13 +153,17 @@ func setupCoordination(ctx context.Context, cluster string, cfg *config.Config,
 	if nodeID == "" {
 		nodeID = deriveNodeID()
 	}
-	// server_id 缺省派生：etcd 配置中心共享一份配置时，
-	// 各副本 node.id 不同 → 派生值天然不同；显式配置优先。回填后 lifecycle 的
-	// source 构造（cfg 同指针）自然取到。
-	if cfg.Source.ServerID == 0 {
-		cfg.Source.ServerID = deriveServerID(nodeID)
-		logging.L().Info("server_id 缺省，已按 node.id 派生",
-			zap.Uint32("server_id", cfg.Source.ServerID), zap.String("node_id", nodeID))
+	// server_id 缺省派生（多源 PRD 05 §6）：按 node.id:sid 逐源派生——
+	// 同进程各源互异（sid 不同）、同源多副本互异（node.id 不同）；显式配置
+	// 优先。回填后 lifecycle 的 source 构造（cfg 同指针）自然取到。
+	for i := range cfg.Sources {
+		spec := &cfg.Sources[i]
+		if spec.Source.ServerID == 0 {
+			spec.Source.ServerID = deriveServerID(nodeID + ":" + spec.ID)
+			logging.L().Info("server_id 缺省，已按 node.id:source_id 派生",
+				zap.Uint32("server_id", spec.Source.ServerID),
+				zap.String("node_id", nodeID), zap.String("source_id", spec.ID))
+		}
 	}
 	reg := etcdx.NewRegistrar(kv, prefix, etcdx.NodeInfo{
 		NodeID: nodeID, AdvertiseAddr: cfg.Node.AdvertiseAddr,
@@ -189,27 +193,29 @@ func setupCoordination(ctx context.Context, cluster string, cfg *config.Config,
 }
 
 // openSourceDB 源库连接（schema 加载 / 位点采样 / 全量扫描 / binlog 拉取共用）。
-func openSourceDB(cfg *config.Config) (*sql.DB, error) {
-	db, err := sql.Open("mysql", sourceDSN(cfg.Source))
+// 每源独立池（多源 PRD 05 §1）。
+func openSourceDB(spec *config.SourceSpec) (*sql.DB, error) {
+	db, err := sql.Open("mysql", sourceDSN(spec.Source))
 	if err != nil {
 		return nil, err
 	}
 	// 池容量 = 常规开销 4 + 快照连接集（stock.workers，ApplyDefaults 后 ≥1）：
 	// 快照会话一表占一根连接，块间 schemaChanged/位点采样仍需走池——容量不足
 	// 会在全量期间永久阻塞
-	db.SetMaxOpenConns(4 + cfg.Stock.Workers)
+	db.SetMaxOpenConns(4 + spec.Stock.Workers)
 	return db, nil
 }
 
 // checkSource 启动检查器（源端要求全项，必须项失败拒绝启动）。
-func checkSource(ctx context.Context, cfg *config.Config, srcDB *sql.DB) error {
+func checkSource(ctx context.Context, spec *config.SourceSpec, srcDB *sql.DB) error {
 	if err := srcDB.PingContext(ctx); err != nil {
 		return fmt.Errorf("源库不可达: %w", err)
 	}
 	res := checkf.Source(ctx, srcDB, checkf.Options{
-		UseGTID: cfg.Source.UseGTID, ServerID: cfg.Source.ServerID,
+		UseGTID: spec.Source.UseGTID, ServerID: spec.Source.ServerID,
 	})
 	logging.L().Info("启动检查（源库环境）",
+		zap.String("source_id", spec.ID),
 		zap.Int("errors", len(res.Errors)), zap.Int("warnings", len(res.Warnings)))
 	fmt.Fprintln(os.Stderr, res.Summary())
 	if !res.OK() {

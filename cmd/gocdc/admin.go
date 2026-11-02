@@ -38,7 +38,7 @@ func buildAdminDeps(st *config.Startup, cfg *config.Config, cfgKey string,
 		Store:      coord.store, Markers: coord.markers,
 		Rules: comp.rules, Gate: comp.ddlGate, Audit: auditStore,
 		DDLLister: comp.ddlGate, // /ddl-events 挂起列表（RUNBOOK §5 排障入口）
-		UseGTID:   cfg.Source.UseGTID,
+		UseGTID:   cfg.Single().Source.UseGTID,
 		MasterPos: func(mctx context.Context) (model.Position, error) {
 			return showMasterStatus(mctx, srcDB)
 		},
