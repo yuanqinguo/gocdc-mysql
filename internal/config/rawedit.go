@@ -2,8 +2,9 @@
 //
 //	LoadFromRaw      原始 YAML 字节走完整加载链（parse → ${ENV} →
 //	                 defaults → Validate），Load 的纯内存变体（可测/可复用）；
-//	SpliceSourceRules yaml.Node 层手术——只替换指定源的 rules 段，其余部分
-//	                 （注释/键序/${ENV} 占位/引号风格）原样保留；
+//	SpliceSourceRules yaml.Node 层手术——只替换指定源的 rules 段，段外内容
+//	                 的注释文本/键序/${ENV} 占位/引号风格保留（缩进/折行/空行
+//	                 由重编码统一为 2 空格风格，非逐字节）；
 //	DiffRules        规则组新旧 diff（预检范围的纯函数决策）。
 //
 // 铁律：合并绝不做 struct 往返——Load 链的 ResolveEnv 会把 ${ENV} 解析成真值，
@@ -53,7 +54,8 @@ func LoadFromRaw(raw []byte, flagCluster string) LoadResult {
 // rules 值节点由 JSON 编码桥接（json tags 即权威字段名），再经 plainSafe
 // 归一去掉不必要的双引号——安全值（如 mask 算法名 null/true）保留引号，
 // 防裸字面量被 YAML 解析成 null/bool（内存教训：枚举值须引号）。
-// 被替换段内部的注释随重写丢失；段外注释/键序/占位逐字节保留。
+// 被替换段内部的注释随重写丢失；段外注释文本/键序/占位/引号风格保留
+// （encodeNode 重编码统一 2 空格缩进与折行，正文若有其他缩进风格会被归一）。
 func SpliceSourceRules(raw []byte, sourceID string, rules []Rule) ([]byte, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(raw, &doc); err != nil {
@@ -109,23 +111,49 @@ func rulesValueNode(rules []Rule) (*yaml.Node, error) {
 	return root, nil
 }
 
-// collapseSingletonMaps 单键对象折叠为标量简写（rules 子树内仅有两处单键
-// 语义）：{enabled: x} → x（RuleSink bool 简写）、{type: "s"} → "s"（MaskSpec
-// 字符串简写）——两种简写均为解码层合法形态。其他单键对象不受影响。
+// collapseSingletonMaps 规则子树的简写归一：只作用于 sinks / mask_columns
+// 两个容器——条目值为单键对象 {enabled: x} → x（RuleSink bool 简写）、
+// {type: "s"} → "s"（MaskSpec 字符串简写），其余结构原样深入。
+//
+// 不得盲折叠整棵子树：mask_columns 的键是用户数据（列名）——单列名为
+// enabled/type 时，容器自身会被误当成简写对象整体替换为其值（MaskSpec 对象
+// 顶掉全列映射），解码必炸或语义全错（2026-11-04 review 抓到）。
 func collapseSingletonMaps(n *yaml.Node) {
 	if n == nil {
 		return
 	}
-	if n.Kind == yaml.MappingNode && len(n.Content) == 2 &&
-		n.Content[0].Kind == yaml.ScalarNode {
-		k := n.Content[0].Value
-		if k == "enabled" || k == "type" {
-			*n = *n.Content[1]
-			return
+	switch n.Kind {
+	case yaml.MappingNode:
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			key, val := n.Content[i], n.Content[i+1]
+			switch key.Value {
+			case "sinks":
+				collapseShorthandEntries(val, "enabled")
+			case "mask_columns":
+				collapseShorthandEntries(val, "type")
+			default:
+				collapseSingletonMaps(val) // 组/表层级继续深入
+			}
+		}
+	case yaml.SequenceNode:
+		for _, c := range n.Content {
+			collapseSingletonMaps(c)
 		}
 	}
-	for _, c := range n.Content {
-		collapseSingletonMaps(c)
+}
+
+// collapseShorthandEntries 简写容器（sinks/mask_columns）内逐条目折叠：值为
+// 单键 {shorthandKey: x} 的对象 → 标量 x。容器本身不动。
+func collapseShorthandEntries(container *yaml.Node, shorthandKey string) {
+	if container == nil || container.Kind != yaml.MappingNode {
+		return
+	}
+	for i := 0; i+1 < len(container.Content); i += 2 {
+		val := container.Content[i+1]
+		if val.Kind == yaml.MappingNode && len(val.Content) == 2 &&
+			val.Content[0].Kind == yaml.ScalarNode && val.Content[0].Value == shorthandKey {
+			*val = *val.Content[1]
+		}
 	}
 }
 
@@ -192,6 +220,8 @@ func setMappingValue(m *yaml.Node, key string, val *yaml.Node) {
 }
 
 // encodeNode 文档节点 → YAML 字节（2 空格缩进，与 deploy 配置形态一致）。
+// 注意：这是整文档重编码——缩进/折行/空行按编码器风格归一，非逐字节拷贝；
+// 节点内容（注释文本/键序/标量原值/引号风格）来自解析树，语义保留。
 func encodeNode(doc *yaml.Node) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)

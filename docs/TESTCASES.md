@@ -122,13 +122,13 @@
 | API-02 | confirm 门禁全覆盖（restock/verify/approve/skip/resign） | 无 confirm 400 | L2+L3 | router 测试 + 验收 G2 | ✅ |
 | API-03 | 位点危险操作 SET-POSITION 门禁 | 错 confirm 400、正确生效；**只覆盖 name/pos，gtid_set/seq/任期以 etcd 现值为底沿用**（ADV-16 回归：整值覆盖抹空 GTID 集=恢复即熔断） | L3 | 验收 G3 + TestMergeSetPosition + 验收 55 PP-07 | ✅ |
 | API-04 | 审计链路（who/what/result + etcd events/audit） | 全写操作留痕 | L3 | 验收 G4 | ✅-L3 |
-| API-05 | restock 清标记+重启精准重跑 | 只重跑目标表 | L3 | 验收 G5 | ✅-L3 |
+| API-05 | restock 清标记精准重跑 | 只重跑目标表（done 表跳过）；2026-11-04 起清标记后自动触发该源重走（排空→重扫→续增量），历史 ✅-L3 验证的是「清标记+手动重启」路径，自动触发链路待 L3 复验 | L3 | 验收 G5 | ✅-L3（触发链路待复验） |
 | API-06 | /verify 契约（缺参 400/错 pk 500 明细/差异 200） | 语义正确 | L3 | 验收 G6 | ✅-L3 |
 | API-07（反方） | 未知路由 404 / 方法不匹配 405 | gin 默认语义不 5xx | L3 | §7 ADV-11 | ✅-L3 |
 | API-08 | /status 管线可见性（pipeline_state/pipeline_error/event_lag_seconds，P0） | 五态流转正确、paused 带 error、契约字段齐；**人工暂停透传 `pipeline_paused_by_op=true`，致命错误暂停时字段省略**（前端据此切换「恢复管线」入口） | L2+L3 | TestRouter_StatusPipelineFields + TestPipeline_SourceInvalidPositionFatal + 验收 A6 输出 | ✅ |
 | API-09 | **pipeline pause/resume 门禁与审计**（13 §3，2026-11-01 新增） | 无 confirm 400 且闭包不被调；confirm 受理恰调一次；未装配 500；闭包错误 500 带消息；pause/resume 写 `pipeline.pause`/`pipeline.resume` 审计（Web /audit + etcd events/audit 双通道） | L1+L3 | TestRouter_PipelinePauseResume / NotWired / PauseError + 验收 55 PP-01/05/09 | ✅ |
 | API-10 | **GET /config/raw + GET /sources/{sid}/rules（编辑种子）**（13 §8，2026-11-03 新增） | raw 回传原始 YAML+revision=ModRevision+config_key；rules 回组形态原样 JSON；file 形态双端点 409；未知源 404 | L1+L2 | TestRouter_ConfigRaw / TestRouter_GetRules（L1 fake）+ TestIntegrationConfigEdit ①⑥（L2 真 etcd） | ✅ |
-| API-11 | **PUT /sources/{sid}/rules 保存全链**（13 §8）：splice→校验→预检→CAS→审计 | 缺 confirm 400 / 缺 base 400 / base 陈旧 409 且不写 / 未知字段（平铺写法）400 带指引 / 空规则 400 / 预检错误 422 不写 / check_only 免 confirm 不写不审计 / 成功 200 新 revision；**etcd 正文：新 rules 落盘、`${ENV}` 占位原样、段外内容逐字节语义保留**；审计含 diff 摘要（冲突+成功各一条） | L1+L2+L3 | TestRouter_PutRules_Save / Rejections / CheckOnly + config rawedit 单测（注释/占位/引号三铁律）+ TestIntegrationConfigEdit ②③④⑤ | ✅ |
+| API-11 | **PUT /sources/{sid}/rules 保存全链**（13 §8）：splice→校验→预检→CAS→审计 | 缺 confirm 400 / 缺 base 400 / base 陈旧 409 快速失败且不写不预检（2026-11-04 优化：冲突在 ReadRaw 后即拒）/ 未知字段（平铺写法）400 带指引 / 空规则 400 / 预检错误 422 不写 / check_only 免 confirm 不写不审计 / 成功 200 新 revision；**etcd 正文：新 rules 落盘、`${ENV}` 占位原样、段外注释文本/键序/占位/引号风格保留（缩进折行由重编码按 2 空格归一，非逐字节）**；审计含 diff 摘要（冲突+成功各一条） | L1+L2+L3 | TestRouter_PutRules_Save / Rejections / CheckOnly + config rawedit 单测（注释/占位/引号三铁律）+ TestIntegrationConfigEdit ②③④⑤ | ✅ |
 | API-12 | **POST /config/apply-restart 重载**（13 §8） | 未接入 409；无 confirm 400；confirm 受理 200 且 Shutdown 恰触发一次（响应先行）；审计 `config.apply_restart` | L1 | TestRouter_ApplyRestart（applyRestartDelay 调短） | ✅ |
 | API-13 | **规则编辑前端纯逻辑**（ruleDraft） | 服务端组形态 JSON ⇄ 草稿往返无损（sinks 对象/bool 双形态、mask 对象/字符串双形态归一）；客户端必填校验（缺 order_by/重复库表/空 sink/空 tables）；exclude/mask 文本编解码；diff 摘要文案 | L1(web) | web/src/features/rules/ruleDraft.test.ts（9 用例，vitest） | ✅ |
 
@@ -152,7 +152,7 @@
 | ADV-11 | 未知路径 / 错误方法打 API | 404 无 5xx | ✅ 404/404/400 |
 | ADV-12 | 位点文件名指向不存在文件 | PURGED 检查拒绝 | ✅（C5 同路径已验证） |
 | ADV-13 | **位点回拨后重放窗口含已放行 DDL/已删表**（时间机器场景，对抗推演自 HA-04+POS-02 组合） | 不死锁 | **抓到 2 个真 bug 已修复**：① column_count_mismatch 无视 on_convert_error 策略强制 fatal → 改走三策略（null/zero 降级单列+计数告警，fail_event 保留上抛）；② 表已 DROP 后重放其历史行事件 fatal → 改跳过+告警+ack（必须 ack 否则水位洞）。修复后重放窗口自愈、管线存活 |
-| ADV-14 | restock 后无人重启（leader 不重扫） | 符合文档语义（清标记→重启→重跑） | ✅ 行为符合 RUNBOOK §2；未重启则位点继续增量（清标记本身不触发重扫）——运维注意 |
+| ADV-14 | restock 触发语义（2026-11-04 升级：清标记后自动触发该源重走，排空→重扫→续增量；排空超时/失位各分支见 lifecycle_restock_test） | 点了即生效，无需再重启进程；调用瞬间失位由接管节点兜底重扫（标记已清） | ⏳ 护栏 L1 已过（TestRestockRestart*）；全链路 L3 待复验。历史语义（清标记→手动重启→重跑，无人重启则位点继续增量）曾 ✅-L3 |
 | ADV-15 | **migrate-gtid/filepos 成功路径**（2026-10-31 新增 L3 组95 首轮抓到） | 迁移受理 200、位点写入 | ❌→✅ **抓到真 bug（typed-nil panic）**：plan*Migration 成功返回 nil `*apiError` 直接作 error 传 audit → 非 nil 接口包 nil 指针 → `result.Error()` 空指针 panic → HTTP 500 空响应、位点未写（gin Recovery 吞栈只留日志）。修复=apiErrToError nil 归一（两调用点）+ 回归测试 TestAuditTypedNilSafety。失败路径不受影响（非 nil verr 正常 400） |
 | ADV-16 | **GTID 模式暂停态 SET-POSITION**（2026-11-01 组55 PP-07 设计时对抗推演抓到） | 改位点只覆盖 name/pos，gtid_set/seq/任期沿用现值（与 etcdctl 直写指引语义一致） | ❌→✅ **抓到真 bug（整值覆盖抹空 GTID 集）**：setPosition 只构造 {name,pos,node_id} 直接 Save（整值覆盖）→ use_gtid=true 下暂停态改位点把 gtid_set 写空 → resume 后管线必因「位点缺 gtid_set」熔断；运行态等值覆盖（G3）因 3s 内水位回写未暴露。修复=mergeSetPosition 融合决策（现值为底只覆盖 name/pos；现值读取失败拒绝盲写）+ 回归测试 TestMergeSetPosition；L3 PP-07 固化「改位点→gtid_set 保留→恢复采用续跑」 |
 | ADV-17 | **审计 etcd key 真身路径**（2026-11-01 组55 PP-09 首轮抓到） | 环形审计 key = `{prefix}/events/audit`（NewAuditStore 契约：prefix=集群前缀） | ❌→✅ **抓到装配缺陷（prefix 双重拼接）**：admin.go 传 `coord.prefix+"/events/audit"` → 真身 key 变 `{prefix}/events/audit/events/audit`——环形读写自洽（Web /audit 正常）但 etcd 侧运维观察路径与文档/etcdctl 直觉不符；G4 的 `--prefix grep` 歪打正着命中双重 key 一直假阳性。修复=装配点传集群前缀 + PP-09 按真身 key 断言双通道留痕 |
@@ -224,7 +224,8 @@ L3 脚本 `.verify/v2/35_ms_core.sh`（数据面）+ `46_ms_ha.sh`（故障面�
 6. 启动核对要求规则覆盖表在目标预建（含 pause 策略下 CREATE 可审批自动建的新表）——运维预建库即可。
 7. RMQ topic 须预建且 FIFO 属性（`mqadmin updateTopic ... -a +message.type=FIFO`）；v5 客户端只拉路由不建 topic。
 8. event_lag_seconds 是活动口径（无新事件时增长=正常）；追平判定看 master_position_lag_bytes=0。
-9. restock 只清标记，重跑需重启/接管触发（RUNBOOK §2）；运行中的 leader 不会自发重扫。
+9. restock 清标记并**自动触发该源重走**（排空→重扫无 done 标记表→续增量，RUNBOOK §2，2026-11-04 语义升级）；
+   调用瞬间失位由接管节点兜底——标记已清，当选必重扫。restock 不写持久暂停标志。
 10. 位点回拨后的重放窗口若包含「已放行的 DDL/已删表」：历史行像按 on_convert_error 策略降级转换
    （缺失尾列置 null/zero+计数告警）、已删表的行事件跳过放行——管线自愈不 fatal（ADV-13）。
 11. auth_disabled=true 是显式裸奔豁免：无凭据可访问 Web，但 confirm 门禁仍独立强制（ADV-10）。

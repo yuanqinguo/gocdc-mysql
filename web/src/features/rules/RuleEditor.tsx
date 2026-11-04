@@ -27,6 +27,7 @@ export function RuleEditor({ sid, open, onClose }: { sid: string; open: boolean;
   const api = useApi()
   const queryClient = useQueryClient()
   const [draft, setDraft] = useState<GroupDraft[] | null>(null)
+  const [seeded, setSeeded] = useState(false)
   const [base, setBase] = useState(0)
   const [result, setResult] = useState<PutRulesResult | null>(null)
   const [savedRevision, setSavedRevision] = useState<number | null>(null)
@@ -37,24 +38,28 @@ export function RuleEditor({ sid, open, onClose }: { sid: string; open: boolean;
     enabled: open,
     staleTime: 0,
   })
-  // 草稿播种（effect，非渲染期 setState）：打开时以配置中心现值初始化；
-  // 关闭即清（下次打开重新播种，外部改动以配置中心为准）。保存后不动草稿、
-  // 手动以返回的新 revision 更新 base——不 invalidate 本查询，避免 refetch
-  // 重置草稿清掉「应用并重启」横幅。
+  // 草稿播种（effect，非渲染期 setState）：每次打开只播种一次——staleTime=0
+  // 的挂载 refetch 晚到时不得覆盖已播种草稿（否则用户在读数间隙的未保存编辑
+  // 被静默清掉，2026-11-04 review 抓到）；关闭即清（下次打开重新播种，外部
+  // 改动以配置中心为准，保存时 CAS 409 兜底并发）。保存后不动草稿、手动以
+  // 返回的新 revision 更新 base——不 invalidate 本查询，避免 refetch 重置
+  // 草稿清掉「应用并重启」横幅。
   useEffect(() => {
     if (!open) {
       setDraft(null)
+      setSeeded(false)
       setResult(null)
       setSavedRevision(null)
       return
     }
-    if (load.data) {
+    if (load.data && !seeded) {
       setDraft(draftFromRules(load.data.rules))
+      setSeeded(true)
       setBase(load.data.revision)
       setResult(null)
       setSavedRevision(null)
     }
-  }, [open, load.data])
+  }, [open, load.data, seeded])
 
   const check = useMutation({
     mutationFn: (drafts: GroupDraft[]) => api.putRulesOf(sid, base, payloadFromDraft(drafts), true),
@@ -124,12 +129,13 @@ export function RuleEditor({ sid, open, onClose }: { sid: string; open: boolean;
       destroyOnHidden
       footer={
         <Space>
+          {/* 未播种（读取中/读取失败）不得提交：drafts=[] + base=0 的请求只会换来误导性 400 */}
           <Button icon={<ThunderboltOutlined />} loading={check.isPending}
-            disabled={clientErrors.length > 0} onClick={() => check.mutate(drafts)}>
+            disabled={!load.data || clientErrors.length > 0} onClick={() => check.mutate(drafts)}>
             预检（不保存）
           </Button>
           <Button type="primary" icon={<SaveOutlined />} loading={save.isPending}
-            disabled={clientErrors.length > 0} onClick={confirmSave}>
+            disabled={!load.data || clientErrors.length > 0} onClick={confirmSave}>
             保存到配置中心
           </Button>
           <Button danger icon={<ExclamationCircleOutlined />} disabled={savedRevision === null}

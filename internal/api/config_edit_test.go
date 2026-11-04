@@ -303,6 +303,28 @@ func TestRouter_PutRules_Rejections(t *testing.T) {
 	}
 }
 
+// TestRouter_PutRules_StaleBaseFailFast CAS base 快速失败：与正文当前
+// revision 不一致时在预检前即 409——不白跑活体预检（预检要开源/目标真实
+// 连接，冲突场景纯浪费），不写存储。2026-11-04 review 优化。
+func TestRouter_PutRules_StaleBaseFailFast(t *testing.T) {
+	t.Setenv("PW", "x")
+	deps, store, pre, _ := editDeps(t)
+
+	w := putRulesReq(deps, "/api/v1/sources/default/rules?confirm=true&base=99", rulesPayload)
+	if w.Code != 409 || !contains(w.Body.String(), "CAS 冲突") {
+		t.Fatalf("陈旧 base 应快速 409: %d %s", w.Code, w.Body.String())
+	}
+	pre.mu.Lock()
+	uncalled := pre.sid == ""
+	pre.mu.Unlock()
+	if !uncalled {
+		t.Fatal("冲突路径不得调用活体预检（ReadRaw 后即拒）")
+	}
+	if store.writes != 0 {
+		t.Fatalf("冲突路径不得写: %d", store.writes)
+	}
+}
+
 // TestRouter_ConfigEdit_V1Body 配置中心正文为 v1 顶层形态（已移除的形态——
 // 外部 etcdctl 写回旧正文 / 升级未改写正文）时：raw 照常透传，GET/PUT rules
 // 500 且错误详情直达 UI（含 v1 形态指引），绝不写入。2026-11 移除自动包装后

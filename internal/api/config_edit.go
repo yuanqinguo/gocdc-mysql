@@ -165,9 +165,18 @@ func (h apiHandlers) putRulesOf(sd *SourceDeps, c *gin.Context) {
 		return
 	}
 
-	_, raw, err := h.ConfigStore.ReadRaw(c.Request.Context())
+	rev, raw, err := h.ConfigStore.ReadRaw(c.Request.Context())
 	if err != nil {
 		respondErr(c, 500, "读取配置中心正文失败: "+err.Error())
+		return
+	}
+	// CAS base 快速失败：与正文当前 revision 不一致立即 409——不再白跑
+	// splice/全量校验/活体预检（预检要开源/目标真实连接，冲突场景纯浪费，
+	// 并发冲突的反馈也不该多等几十秒）。冲突尝试与 CASWrite 冲突同审计地位。
+	if !checkOnly && rev != base {
+		auditSource(auditOrNil(h.Audit), c, sd.ID, auditConfigRulesUpdate,
+			fmt.Sprintf("stale base=%d current=%d", base, rev), ErrConfigCASConflict)
+		respondErr(c, 409, ErrConfigCASConflict.Error())
 		return
 	}
 	oldRes := config.LoadFromRaw(raw, h.Cluster)

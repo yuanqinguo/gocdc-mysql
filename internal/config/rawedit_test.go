@@ -152,6 +152,74 @@ func TestSpliceSourceRules_V2_Preserves(t *testing.T) {
 	}
 }
 
+// TestSpliceSourceRules_MaskColumnNamesCollide 单 mask 列名撞简写键名
+// （enabled/type）：mask_columns 容器自身是用户数据键，不得被当成简写对象
+// 折叠掉（盲折叠会把整列映射顶成 MaskSpec 对象——静默改错脱敏目标还过校验，
+// 2026-11-04 review 抓到）。折叠只允许发生在 sinks/mask_columns 的条目值上。
+func TestSpliceSourceRules_MaskColumnNamesCollide(t *testing.T) {
+	t.Setenv("SRC_A_PASSWORD", "p")
+	t.Setenv("DST_PASSWORD", "p")
+	mkRules := func(col string, spec MaskSpec) []Rule {
+		return []Rule{{
+			Schema: "db1",
+			Sinks:  &RuleSinks{MySQL: RuleSink{Enabled: true}},
+			Tables: []TableRule{{
+				Table: "t1", OrderByColumn: "id", DoStock: doStockPtr(true),
+				MaskColumns: map[string]MaskSpec{col: spec},
+			}},
+		}}
+	}
+	cases := []struct {
+		col  string
+		spec MaskSpec
+	}{
+		{"enabled", MaskSpec{Type: MaskPhone}},
+		{"type", MaskSpec{Type: MaskTruncate, Keep: 3}},
+	}
+	for _, tc := range cases {
+		out, err := SpliceSourceRules([]byte(validV2Body), "src-a", mkRules(tc.col, tc.spec))
+		if err != nil {
+			t.Fatalf("列名 %s: splice: %v", tc.col, err)
+		}
+		res := LoadFromRaw(out, "test-edit")
+		if len(res.Errors) > 0 {
+			t.Fatalf("列名 %s: 替换后正文未通过加载链: %v\n---\n%s", tc.col, res.Errors, out)
+		}
+		var spec *SourceSpec
+		for i := range res.Config.Sources {
+			if res.Config.Sources[i].ID == "src-a" {
+				spec = &res.Config.Sources[i]
+			}
+		}
+		if spec == nil || len(spec.Rules[0].Tables) != 1 {
+			t.Fatalf("列名 %s: 规则未生效: %+v", tc.col, spec)
+		}
+		got, ok := spec.Rules[0].Tables[0].MaskColumns[tc.col]
+		if !ok || got.Type != tc.spec.Type {
+			t.Fatalf("列名 %s: mask 语义被破坏: want %s on %q, got %+v (all=%+v)",
+				tc.col, tc.spec.Type, tc.col, got, spec.Rules[0].Tables[0].MaskColumns)
+		}
+		if tc.spec.Keep > 0 && got.Keep != tc.spec.Keep {
+			t.Fatalf("列名 %s: keep 语义被破坏: want %d, got %d", tc.col, tc.spec.Keep, got.Keep)
+		}
+	}
+	// 正向对照：sinks/mask 条目值的简写折叠仍生效（bool 简写 + 字符串简写）
+	out, err := SpliceSourceRules([]byte(validV2Body), "src-a", []Rule{{
+		Schema: "db1",
+		Sinks:  &RuleSinks{MySQL: RuleSink{Enabled: true}},
+		Tables: []TableRule{{
+			Table: "t1", OrderByColumn: "id", DoStock: doStockPtr(true),
+			MaskColumns: map[string]MaskSpec{"phone": {Type: MaskNull}},
+		}},
+	}})
+	if err != nil {
+		t.Fatalf("对照 splice: %v", err)
+	}
+	if !strings.Contains(string(out), "mysql: true") || !strings.Contains(string(out), `phone: "null"`) {
+		t.Fatalf("简写折叠回归（sinks bool / mask 字符串）:\n%s", out)
+	}
+}
+
 // TestSpliceSourceRules_V1Rejected v1 顶层形态已移除：splice 与加载链均报错
 // 并给 sources[] 改写指引（不再自动包装/替换顶层 rules）。
 func TestSpliceSourceRules_V1Rejected(t *testing.T) {
