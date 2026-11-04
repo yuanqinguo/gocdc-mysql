@@ -422,7 +422,7 @@ curl http://127.0.0.1:9595/metrics                            # Prometheus 指�
 |------|-----------|
 | 启动报「binlog_format 非 ROW」 | 源库参数不满足，改配置并重启会话（检查器 fail-fast） |
 | 启动报「目标表 xxx 不存在」 | 目标同名库表须预建；或列集不一致（缺列/NOT NULL 无默认的 exclude 列） |
-| 启动报「无快照锁权限」 | 复制账号缺 RELOAD/BACKUP_ADMIN；或显式 `stock.lock_mode:"none"` 接受近似一致 |
+| 启动报「无快照锁权限」 | 复制账号缺锁权限：FTWRL 由 RELOAD **或 FLUSH_TABLES** 任一放行，backup 锁需 BACKUP_ADMIN（06 §3 降级矩阵）；或显式 `stock.lock_mode:"none"` 接受近似一致 |
 | 启动报「下游目标不可达」 | 目标库连接失败；先 telnet 目标端口 |
 | RMQ 启动报 TOPIC_NOT_FOUND | topic 未预建——mqadmin updateTopic（§7.2） |
 | RMQ 报 message type not match | topic 缺 FIFO 属性——`-a +message.type=FIFO` |

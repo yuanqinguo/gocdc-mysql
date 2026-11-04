@@ -34,16 +34,12 @@ C5=$($DST -N -e "SELECT COUNT(*) FROM rmqtest.msg" 2>/dev/null)
 echo "  先增量落目标: dst=$C5（期待100）"
 TS=$(date +%s)
 echo "  restock 前标记: $($ETCDC get /gocdc/verify/sources/default/stock/rmqtest.msg --print-value-only 2>/dev/null | head -c 40)"
-curl -sS --noproxy '*' --max-time 10 -u admin:demo123 -X POST -o /tmp/v2/rs.json -w '%{http_code}' "$API/sources/default/rules/by-schema/rmqtest/msg/restock?confirm=true" > /tmp/v2/rs.code 2>/tmp/v2/rs.err
+# 2026-11-04 语义升级：restock 即时触发该源重走（排空→重扫→续增量），无需再
+# 重启进程——旧写法 restock 后再 kill+stub_start 会把进行中的重扫打断重启，
+# 快照事件产两遍（200≠100）。消费者稍后才起：topic 自组首重置后未清过，新组
+# 从 EARLIEST 重放全部积压（含重扫快照事件），天然免疫时序。
+curl -sS --noproxy '*' --max-time 25 -u admin:demo123 -X POST -o /tmp/v2/rs.json -w '%{http_code}' "$API/sources/default/rules/by-schema/rmqtest/msg/restock?confirm=true" > /tmp/v2/rs.code 2>/tmp/v2/rs.err
 echo "  restock: code=$(cat /tmp/v2/rs.code 2>/dev/null) err=[$(cat /tmp/v2/rs.err 2>/dev/null)] body=[$(cat /tmp/v2/rs.json 2>/dev/null)] pid=$(pickpid node1)"
-kill -TERM $(pickpid node1) 2>/dev/null
-for i in $(seq 1 30); do [ -z "$(pickpid node1)" ] && break; sleep 1; done
-stub_start node1 verify :9595 :8060
-wait_ready 9595 60 || bad "I0 重启"
-sleep 3
-echo "  重启后标记: $($ETCDC get /gocdc/verify/sources/default/stock/rmqtest.msg --print-value-only 2>/dev/null | head -c 40)"
-# 消费者在重启完成后才起：topic 自组首重置后未清过，新组从 EARLIEST 重放全部积压
-# （含刚产出的重扫快照事件）——天然免疫跨重启的 idle 超时
 setsid nohup $RMQCONS -topic CDC_rmqtest_msg -group g5-$TS -out /tmp/rmq-g5.jsonl -idle 15s > /tmp/rmqcons-g5.log 2>&1 &
 STOCKN=0
 for i in $(seq 1 30); do

@@ -43,11 +43,17 @@ for i in $(seq 1 20); do
 done
 [ "$ALIVE" = "1" ] && [ "$H7" = "1" ] && ok "HA-07 恢复后续传零丢失" || bad "HA-07 (alive=$ALIVE c=$C)"
 
-grp "HA-10 严格版：RELOAD+BACKUP_ADMIN 全摘 → restock → 重启全量锁失败 fail-fast"
+grp "HA-10 严格版：RELOAD/FLUSH_TABLES/BACKUP_ADMIN 全摘 → restock → 重启全量锁失败 fail-fast"
 # 摘/还权限必须由 socket 会话（root@localhost）执行：MySQL 要求授权者持有被授
 # 权限，root@'%' 自摘自还则恢复 GRANT 必失败（2>/dev/null 吞错 → 环境带伤传染后续组）
-docker exec vf-src mysql -uroot -p123456 -e "REVOKE RELOAD, BACKUP_ADMIN ON *.* FROM 'root'@'%'" 2>/dev/null
-api "/rules/rmqtest.msg/restock?confirm=true" POST >/dev/null
+# 摘权清单含 FLUSH_TABLES（2026-11-04 实证 MySQL 8.0.44：FTWRL 由 RELOAD 或
+# FLUSH_TABLES 任一放行，06 §3 降级矩阵原文如此——只摘 RELOAD+BACKUP_ADMIN 时
+# FTWRL 照常成功、auto 探测永不失败，case 空转成 timeout 124 假 PASS）。
+# restock 走源级路由（旧顶层 /rules/{db}.{table}/restock 已随多源化移除）；语义升级
+# 后 restock 会即时触发重走（重扫当场锁失败 → 该源致命停），随后的冷启动重扫再验
+# boot 期 fail-fast（进程退出≠0），两条路径都吃到权限缺失。
+docker exec vf-src mysql -uroot -p123456 -e "REVOKE RELOAD, FLUSH_TABLES, BACKUP_ADMIN ON *.* FROM 'root'@'%'" 2>/dev/null
+api "/sources/default/rules/by-schema/rmqtest/msg/restock?confirm=true" POST >/dev/null
 kill -TERM $(pickpid node1) 2>/dev/null
 for i in $(seq 1 30); do [ -z "$(pickpid node1)" ] && break; sleep 1; done
 d=/tmp/v2/ha10; rm -rf $d; mkdir -p $d
@@ -66,9 +72,11 @@ cp "$BIN" $d/gocdcbin
 HE=$(cat $d/e.log)
 HMSG=$(grep -aE '全量|锁|fail|fatal|RELOAD|BACKUP' $d/out.log | grep -av etcd | head -3)
 echo "  exit=$HE（非0=本轮未起管线）: $HMSG"
-docker exec vf-src mysql -uroot -p123456 -e "GRANT RELOAD, BACKUP_ADMIN ON *.* TO 'root'@'%'" 2>/dev/null
-G=$(docker exec vf-src mysql -uroot -p123456 -N -e "SHOW GRANTS FOR 'root'@'%'" 2>/dev/null | grep -c BACKUP_ADMIN)
-[ "$G" -ge 1 ] && echo "  权限已恢复（BACKUP_ADMIN 在授权）" || echo "  ❌ 权限恢复失败（后续组 wipe_data 将 1045）"
+docker exec vf-src mysql -uroot -p123456 -e "GRANT RELOAD, FLUSH_TABLES, BACKUP_ADMIN ON *.* TO 'root'@'%'" 2>/dev/null
+# 按 information_schema 计权限数而非 SHOW GRANTS 行数：revoke/regrant 后 MySQL 会把
+# 多个动态权限合并进同一行输出，按行 grep -c 会把已恢复误判成失败（2026-11-04 实证）
+G=$(docker exec vf-src mysql -uroot -p123456 -N -e "SELECT COUNT(*) FROM information_schema.user_privileges WHERE grantee=\"'root'@'%'\" AND privilege_type IN ('RELOAD','FLUSH_TABLES','BACKUP_ADMIN')" 2>/dev/null)
+[ "$G" -ge 3 ] && echo "  权限已恢复（RELOAD/FLUSH_TABLES/BACKUP_ADMIN 齐备）" || echo "  ❌ 权限恢复失败（后续组 wipe_data 将 1045）"
 [ "$HE" != "0" ] && [ -n "$HMSG" ] && ok "HA-10 全量锁权限缺失 fail-fast（进程态拒绝，不静默降级）" || bad "HA-10 (exit=$HE)"
 
 # 恢复常态：重启节点确认管线可起

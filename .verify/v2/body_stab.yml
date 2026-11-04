@@ -1,0 +1,117 @@
+# 稳定性 demo 配置正文（多源集群：cluster gocdc-ms 复用验收后的两源位点续传）
+# 双节点 HA 共担此配置；三链路：
+#   src-a · msa.orders     → MySQL 直写 ms_merged.orders（vf-dst）
+#   src-a · rmqtest.msg    → RocketMQ CDC_rmqtest_msg（纯 MQ，长驻消费者）
+#   src-b · msb.users      → MySQL 直写 ms_merged.users（vf-dst，第二源实例 vf-src2）
+config_version: 2
+cluster: gocdc-ms
+
+node: {}
+
+ha:
+  enabled: true
+  lease_ttl_seconds: 10
+  leader_check_interval_ms: 2000
+  resign_on_shutdown: true
+
+pipeline:
+  workers: 4
+  worker_queue_size: 8192
+  batch_size: 500
+  flush_interval_ms: 200
+  position_save_interval_ms: 3000
+
+stock:
+  lock_mode: auto
+  chunk_rows: 5000
+  throttle_ms: 0
+  workers: 4
+
+sources:
+  - id: src-a
+    source:
+      addr: 127.0.0.1:13306
+      user: root
+      password: "123456"
+      charset: utf8mb4
+      flavor: mysql
+      timezone: UTC
+      heartbeat_interval_ms: 3000
+      read_timeout_ms: 60000
+      exclude_schemas: [mysql, sys, information_schema, performance_schema]
+      use_gtid: true
+    targets:
+      mysql:
+        enabled: true
+        addr: 127.0.0.1:13307
+        user: root
+        password: "123456"
+        charset: utf8mb4
+        max_open_conns: 10
+        max_idle_conns: 5
+        conn_max_lifetime_min: 30
+        tx_chunk_rows: 500
+        target_database: ms_merged
+        ddl_sync: true
+      rocketmq:
+        enabled: true
+        name_servers: [127.0.0.1:8081]
+        group: gocdc-stab
+        topic_prefix: "STAB_"          # 独立前缀避开 CDC_* 旧 topic 的 CommitLog 积压
+        order_by: row
+        send_timeout_ms: 5000
+    rules:
+      - schema: msa
+        sinks: {mysql: true}
+        ddl_policy: pause
+        tables:
+          - {table: orders, order_by_column: id, do_stock: true}
+      - schema: rmqtest
+        sinks: {rocketmq: true}
+        ddl_policy: ignore
+        tables:
+          - {table: msg, do_stock: false}
+
+  - id: src-b
+    source:
+      addr: 127.0.0.1:13406
+      user: root
+      password: "123456"
+      charset: utf8mb4
+      flavor: mysql
+      timezone: UTC
+      heartbeat_interval_ms: 3000
+      read_timeout_ms: 60000
+      exclude_schemas: [mysql, sys, information_schema, performance_schema]
+      use_gtid: true
+    targets:
+      mysql:
+        enabled: true
+        addr: 127.0.0.1:13307
+        user: root
+        password: "123456"
+        charset: utf8mb4
+        max_open_conns: 10
+        max_idle_conns: 5
+        conn_max_lifetime_min: 30
+        tx_chunk_rows: 500
+        target_database: ms_merged
+        ddl_sync: true
+    rules:
+      - schema: msb
+        sinks: {mysql: true}
+        ddl_policy: pause
+        tables:
+          - {table: users, order_by_column: id, do_stock: true}
+
+observability:
+  metrics_addr: ${METRICS_ADDR}
+  web:
+    enabled: true
+    addr: ${WEB_ADDR}
+    username: admin
+    password: ${WEB_PASSWORD}
+    auth_disabled: false
+  log:
+    level: info
+    json: false

@@ -2,7 +2,7 @@
 # v2 组70：反方对抗（ADV 系列）——ADV-01 无主键双层拦截（临时白名单正文）/
 # 02 目标额外UK / 03 保留字（预建白名单表全链）/ 04 零日期 / 05 60KB TEXT /
 # 06 自增漂移 / 08 重复skip幂等 / 09 TRUNCATE 审批 / 10 auth_disabled 裸奔 /
-# 13 位点回拨时间机器（已决策 DDL+旧行像重放） / 14 restock 不重启不重扫
+# 13 位点回拨时间机器（已决策 DDL+旧行像重放） / 14 restock 即触发重走（排空→重扫→续增量）
 # 组形态适配：CREATE 挂起自动接入已移除（arch16）——order/adv13t 为预建白名单表，
 # ADV-01 经临时正文（+noltbl）构造双层拦截。
 set -u
@@ -226,14 +226,31 @@ ALIVE=$( [ -n "$(pickpid node1)" ] && echo 1 || echo 0 )
 echo "  管线存活=$ALIVE lag追平=$A13 new_table重复=$DUP13 adv13t行=$A13ROWS（期待3）"
 [ "$ALIVE" = "1" ] && [ "$A13" = "1" ] && [ "$DUP13" = "0" ] && [ "$A13ROWS" = "3" ] && ok "ADV-13 时间机器自愈不死锁" || bad "ADV-13 (alive=$ALIVE lag=$A13 dup=$DUP13 rows=$A13ROWS)"
 
-grp "ADV-14 restock 不重启 → 不自发重扫（文档语义）"
+grp "ADV-14 restock 即触发该源重走（排空→重扫→续增量，无需重启）"
+# 2026-11-04 语义升级：restock 从「只清标记等下次重启重扫」升级为「清标记+自动
+# 触发该源重走」——排空当前管线 → runStock 重扫无 done 标记表（upsert 幂等覆盖）
+# → 续接增量。旧顶层路由 /rules/{db}.{table}/restock 已随多源化移除（一律 404），
+# 一律走源级路由。空表重扫也打「全量表完成」（service.go scanOne 无条件打），
+# 故以日志条数增长观察重扫。
 PRE=$($DST -N -e "SELECT COUNT(*) FROM rmqtest.msg" 2>/dev/null)
-api "/rules/rmqtest.msg/restock?confirm=true" POST >/dev/null
-sleep 20
+BASE=$(grep -ac '全量表完成.*rmqtest' /tmp/v2/node1.log 2>/dev/null); BASE=${BASE:-0}
+CODE=$(curl -s --noproxy '*' -u admin:demo123 --max-time 25 -o /tmp/v2/adv14.json -w '%{http_code}' -X POST "$API/sources/default/rules/by-schema/rmqtest/msg/restock?confirm=true")
+RES_OK=0
+for i in $(seq 1 30); do
+  NOW=$(grep -ac '全量表完成.*rmqtest' /tmp/v2/node1.log 2>/dev/null); NOW=${NOW:-0}
+  [ "$NOW" -gt "$BASE" ] && { RES_OK=1; echo "  重扫完成 t=${i}x2s 全量日志=$BASE→$NOW"; break; }
+  sleep 2
+done
 POSTN=$($DST -N -e "SELECT COUNT(*) FROM rmqtest.msg" 2>/dev/null)
-RESN=$(grep -ac '全量表完成.*rmqtest' /tmp/v2/node1.log 2>/dev/null)
-echo "  restock 后 20s: dst=$PRE→$POSTN 全量日志=$RESN（期待不变/0）"
-[ "$PRE" = "$POSTN" ] && [ "${RESN:-0}" = "0" ] && ok "ADV-14 运行中不自发重扫" || bad "ADV-14 ($PRE→$POSTN log=$RESN)"
+$SRC -e "INSERT INTO rmqtest.msg (name,qty,amount,note) VALUES ('adv14-inc',1,1,'restock后续增量')" 2>/dev/null
+INC=0
+for i in $(seq 1 15); do
+  C=$($DST -N -e "SELECT COUNT(*) FROM rmqtest.msg WHERE name='adv14-inc'" 2>/dev/null)
+  [ "$C" = "1" ] && { INC=1; echo "  续增量流动 t=${i}x2s"; break; }; sleep 2
+done
+echo "  restock: code=$CODE dst行数=$PRE→$POSTN 重扫日志增长=$RES_OK 续增量=$INC"
+[ "$CODE" = "200" ] && [ "$RES_OK" = "1" ] && [ "$POSTN" = "$PRE" ] && [ "$INC" = "1" ] \
+  && ok "ADV-14 restock 即时重扫+续增量（无需重启进程）" || bad "ADV-14 (code=$CODE $PRE→$POSTN rescan=$RES_OK inc=$INC)"
 
 for EV in $(pending_id); do api "/sources/default/ddl/$EV/skip?confirm=true" POST >/dev/null; done
 killall_gocdc

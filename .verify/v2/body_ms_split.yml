@@ -1,0 +1,104 @@
+# 多源组分库配置正文（cluster=ms-verify，MS-10 背压隔离用）：
+# src-a → vf-dst(13307) 的 ms_merged_a；src-b → vf-dst2(13407) 的 ms_merged_b
+#——两源各写各的目标实例，停 vf-dst 只反压 src-a，src-b 不受影响。
+config_version: 2
+cluster: ms-verify
+
+node: {}
+
+ha:
+  enabled: false
+  lease_ttl_seconds: 10
+  leader_check_interval_ms: 2000
+  resign_on_shutdown: true
+
+pipeline:
+  workers: 4
+  worker_queue_size: 4096
+  batch_size: 200
+  flush_interval_ms: 200
+  position_save_interval_ms: 2000
+
+stock:
+  lock_mode: auto
+  chunk_rows: 5000
+  throttle_ms: 0
+  workers: 2
+
+sources:
+  - id: src-a
+    source:
+      addr: 127.0.0.1:13306
+      user: root
+      password: "123456"
+      charset: utf8mb4
+      flavor: mysql
+      timezone: UTC
+      heartbeat_interval_ms: 3000
+      read_timeout_ms: 60000
+      exclude_schemas: [mysql, sys, information_schema, performance_schema]
+      use_gtid: true
+    targets:
+      mysql:
+        enabled: true
+        addr: 127.0.0.1:13307
+        user: root
+        password: "123456"
+        charset: utf8mb4
+        max_open_conns: 10
+        max_idle_conns: 5
+        conn_max_lifetime_min: 30
+        tx_chunk_rows: 100
+        target_database: ms_merged_a
+        ddl_sync: false
+    rules:
+      - schema: msa
+        sinks: {mysql: true}
+        ddl_policy: ignore
+        tables:
+          - {table: orders, order_by_column: id, do_stock: false}
+          - {table: evlog, order_by_column: id, do_stock: false}
+
+  - id: src-b
+    source:
+      addr: 127.0.0.1:13406
+      user: root
+      password: "123456"
+      charset: utf8mb4
+      flavor: mysql
+      timezone: UTC
+      heartbeat_interval_ms: 3000
+      read_timeout_ms: 60000
+      exclude_schemas: [mysql, sys, information_schema, performance_schema]
+      use_gtid: true
+    targets:
+      mysql:
+        enabled: true
+        addr: 127.0.0.1:13407
+        user: root
+        password: "123456"
+        charset: utf8mb4
+        max_open_conns: 10
+        max_idle_conns: 5
+        conn_max_lifetime_min: 30
+        tx_chunk_rows: 100
+        target_database: ms_merged_b
+        ddl_sync: false
+    rules:
+      - schema: msb
+        sinks: {mysql: true}
+        ddl_policy: ignore
+        tables:
+          - {table: users, order_by_column: id, do_stock: false}
+          - {table: tlog, order_by_column: id, do_stock: false}
+
+observability:
+  metrics_addr: ${METRICS_ADDR}
+  web:
+    enabled: true
+    addr: ${WEB_ADDR}
+    username: admin
+    password: ${WEB_PASSWORD}
+    auth_disabled: false
+  log:
+    level: info

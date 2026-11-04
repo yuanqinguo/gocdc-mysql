@@ -177,8 +177,9 @@ func acquireLock(ctx context.Context, conn *sql.Conn, mode string) (string, erro
 		if _, err := attempt(ctx, conn, "LOCK INSTANCE FOR BACKUP", LockBackup); err == nil {
 			return LockBackup, nil
 		}
-		return "", fmt.Errorf("stock: 无快照锁权限（RELOAD/BACKUP_ADMIN 均不可用）；" +
-			"如接受近似一致性请显式配置 stock.lock_mode=\"none\"（06 §3，防无感降级）")
+		return "", fmt.Errorf("stock: 无快照锁权限（FTWRL/backup 锁均不可用：检查 RELOAD/FLUSH_TABLES/BACKUP_ADMIN——" +
+			"FTWRL 由 RELOAD 或 FLUSH_TABLES 任一放行，06 §3）；" +
+			"如接受近似一致性请显式配置 stock.lock_mode=\"none\"（防无感降级）")
 	default:
 		return "", fmt.Errorf("stock: 未知 lock_mode %q", mode)
 	}

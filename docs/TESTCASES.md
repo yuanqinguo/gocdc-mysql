@@ -76,7 +76,7 @@
 | HA-07 | 源库宕机→恢复 | 断连退避重连、续传零丢失 | L3 | 验收（源库 blink） | ✅-L3 |
 | HA-08 | 目标库宕机→恢复（ErrInvalidConn 重试） | 持续重试不退出、恢复收敛 | L3 | 验收（目标库 blink ×2） | ✅-L3 |
 | HA-09（反方） | 全量进行中 kill leader → 新 leader 接管 stock | session_id 不同 → 整表重扫，最终收敛 | L3 | §7 ADV-07 | ✅-L3 |
-| HA-10 | 全量失败 fail-fast（无快照锁权限） | 拒绝无感降级、不启管线 | L3 | 验收（RELOAD 授权前） | ✅-L3 |
+| HA-10 | 全量失败 fail-fast（无快照锁权限） | 拒绝无感降级、不启管线；摘权清单须含 FLUSH_TABLES（2026-11-04 MySQL 8.0.44 实证：FTWRL 由 RELOAD 或 FLUSH_TABLES 任一放行，06 §3 降级矩阵原文——只摘 RELOAD+BACKUP_ADMIN 时锁链不断、case 空转成 timeout 假 PASS） | L3 | 验收（RELOAD 授权前） | ✅-L3 |
 | HA-11 | 下游不可达拒绝启动 | fatal「下游目标不可达」 | L3 | 验收 A7 | ✅-L3 |
 | HA-12（反方） | 重复 approve/skip 同一 DDL 幂等 | 二次调用返回成功（Settled 短路） | L3 | §7 ADV-08 | ✅-L3 |
 | HA-13 | **人工暂停/恢复管线**（13 §3，2026-11-01 新增）：pause 受理→paused+`pipeline_paused_by_op`+保持 Leader；暂停期零投递、位点停摆；resume 从 etcd 位点续跑、积压收敛；**标志跨重启/失位持久**（本任期不启动，直到显式 resume）；重复 pause/resume 被 CAS 拒绝 | 全链语义正确 | L1+L3 | TestPausePipeline_* / TestResumePipeline_*（护栏） + 验收 55 PP | ✅ |
@@ -122,7 +122,7 @@
 | API-02 | confirm 门禁全覆盖（restock/verify/approve/skip/resign） | 无 confirm 400 | L2+L3 | router 测试 + 验收 G2 | ✅ |
 | API-03 | 位点危险操作 SET-POSITION 门禁 | 错 confirm 400、正确生效；**只覆盖 name/pos，gtid_set/seq/任期以 etcd 现值为底沿用**（ADV-16 回归：整值覆盖抹空 GTID 集=恢复即熔断） | L3 | 验收 G3 + TestMergeSetPosition + 验收 55 PP-07 | ✅ |
 | API-04 | 审计链路（who/what/result + etcd events/audit） | 全写操作留痕 | L3 | 验收 G4 | ✅-L3 |
-| API-05 | restock 清标记精准重跑 | 只重跑目标表（done 表跳过）；2026-11-04 起清标记后自动触发该源重走（排空→重扫→续增量），历史 ✅-L3 验证的是「清标记+手动重启」路径，自动触发链路待 L3 复验 | L3 | 验收 G5 | ✅-L3（触发链路待复验） |
+| API-05 | restock 清标记精准重跑 | 只重跑目标表（done 表跳过）；2026-11-04 起清标记后自动触发该源重走（排空→重扫→续增量）——触发链路当日 L3 复验全绿：65 组 I0/G5 快照恰 100 双写、70 组 ADV-14 重扫+续增量、35 组 MS-08 逐源、45 组 ADV-07 杀 leader 兜底、80 组 HA-10 锁缺失拒绝 | L3 | 验收 G5 | ✅-L3 |
 | API-06 | /verify 契约（缺参 400/错 pk 500 明细/差异 200） | 语义正确 | L3 | 验收 G6 | ✅-L3 |
 | API-07（反方） | 未知路由 404 / 方法不匹配 405 | gin 默认语义不 5xx | L3 | §7 ADV-11 | ✅-L3 |
 | API-08 | /status 管线可见性（pipeline_state/pipeline_error/event_lag_seconds，P0） | 五态流转正确、paused 带 error、契约字段齐；**人工暂停透传 `pipeline_paused_by_op=true`，致命错误暂停时字段省略**（前端据此切换「恢复管线」入口） | L2+L3 | TestRouter_StatusPipelineFields + TestPipeline_SourceInvalidPositionFatal + 验收 A6 输出 | ✅ |
@@ -152,7 +152,7 @@
 | ADV-11 | 未知路径 / 错误方法打 API | 404 无 5xx | ✅ 404/404/400 |
 | ADV-12 | 位点文件名指向不存在文件 | PURGED 检查拒绝 | ✅（C5 同路径已验证） |
 | ADV-13 | **位点回拨后重放窗口含已放行 DDL/已删表**（时间机器场景，对抗推演自 HA-04+POS-02 组合） | 不死锁 | **抓到 2 个真 bug 已修复**：① column_count_mismatch 无视 on_convert_error 策略强制 fatal → 改走三策略（null/zero 降级单列+计数告警，fail_event 保留上抛）；② 表已 DROP 后重放其历史行事件 fatal → 改跳过+告警+ack（必须 ack 否则水位洞）。修复后重放窗口自愈、管线存活 |
-| ADV-14 | restock 触发语义（2026-11-04 升级：清标记后自动触发该源重走，排空→重扫→续增量；排空超时/失位各分支见 lifecycle_restock_test） | 点了即生效，无需再重启进程；调用瞬间失位由接管节点兜底重扫（标记已清） | ⏳ 护栏 L1 已过（TestRestockRestart*）；全链路 L3 待复验。历史语义（清标记→手动重启→重跑，无人重启则位点继续增量）曾 ✅-L3 |
+| ADV-14 | restock 触发语义（2026-11-04 升级：清标记后自动触发该源重走，排空→重扫→续增量；排空超时/失位各分支见 lifecycle_restock_test） | 点了即生效，无需再重启进程；调用瞬间失位由接管节点兜底重扫（标记已清） | ✅-L3（2026-11-04 复验：70 组 case 重写为源级路由+新断言——重扫日志增长 0→1、续增量流动、upsert 行数稳定；旧「清标记等重启」断言随语义废弃） |
 | ADV-15 | **migrate-gtid/filepos 成功路径**（2026-10-31 新增 L3 组95 首轮抓到） | 迁移受理 200、位点写入 | ❌→✅ **抓到真 bug（typed-nil panic）**：plan*Migration 成功返回 nil `*apiError` 直接作 error 传 audit → 非 nil 接口包 nil 指针 → `result.Error()` 空指针 panic → HTTP 500 空响应、位点未写（gin Recovery 吞栈只留日志）。修复=apiErrToError nil 归一（两调用点）+ 回归测试 TestAuditTypedNilSafety。失败路径不受影响（非 nil verr 正常 400） |
 | ADV-16 | **GTID 模式暂停态 SET-POSITION**（2026-11-01 组55 PP-07 设计时对抗推演抓到） | 改位点只覆盖 name/pos，gtid_set/seq/任期沿用现值（与 etcdctl 直写指引语义一致） | ❌→✅ **抓到真 bug（整值覆盖抹空 GTID 集）**：setPosition 只构造 {name,pos,node_id} 直接 Save（整值覆盖）→ use_gtid=true 下暂停态改位点把 gtid_set 写空 → resume 后管线必因「位点缺 gtid_set」熔断；运行态等值覆盖（G3）因 3s 内水位回写未暴露。修复=mergeSetPosition 融合决策（现值为底只覆盖 name/pos；现值读取失败拒绝盲写）+ 回归测试 TestMergeSetPosition；L3 PP-07 固化「改位点→gtid_set 保留→恢复采用续跑」 |
 | ADV-17 | **审计 etcd key 真身路径**（2026-11-01 组55 PP-09 首轮抓到） | 环形审计 key = `{prefix}/events/audit`（NewAuditStore 契约：prefix=集群前缀） | ❌→✅ **抓到装配缺陷（prefix 双重拼接）**：admin.go 传 `coord.prefix+"/events/audit"` → 真身 key 变 `{prefix}/events/audit/events/audit`——环形读写自洽（Web /audit 正常）但 etcd 侧运维观察路径与文档/etcdctl 直觉不符；G4 的 `--prefix grep` 歪打正着命中双重 key 一直假阳性。修复=装配点传集群前缀 + PP-09 按真身 key 断言双通道留痕 |
@@ -173,7 +173,7 @@ L3 脚本 `.verify/v2/35_ms_core.sh`（数据面）+ `46_ms_ha.sh`（故障面�
 | MS-05 | 跨源 DDL 冻结半径 | 源 A DDL pending 只冻结源 A，源 B 继续推进；approve 走 /sources/{sid}/ddl；记录带 source 字段（E6） | L2 | 35 组 | ✅-L3 |
 | MS-06 | 逐源 pause/resume + 暂停期增量冻结/补投 | 暂停只影响该源；恢复后积压补投（E7） | L2 | 35 组 | ✅-L3 |
 | MS-07 | 逐源位点回拨重放 | 回拨只影响该源；重放幂等收敛 verify=0（E8） | L2 | 35 组 | ✅-L3 |
-| MS-08 | 逐源 restock | 只重扫该源该表，其他源与其他表不动（E9） | L2 | 35 组 | ✅-L3 |
+| MS-08 | 逐源 restock | 只重扫该源该表，其他源与其他表不动（E9）；2026-11-04 语义升级后复验：restock 即时重走，case 内显式重启冗余但兼容（重扫被打断由 boot 兜底重扫） | L2 | 35 组 | ✅-L3 |
 | MS-09 | MQ 双源：topic 不相交（V4 拦死）+ envelope source 字段 + 各自保序 | 前缀不同不冲突；消息带 source=src-a；(topic,event_id) 去重成立（E10） | L2 | 35 组 | ✅-L3 |
 | MS-10 | 背压隔离（分目标库：停 dst → 仅 src-a 反压/failed，src-b 不受影响） | 无背压传导；dst 恢复后 src-a 自愈（E11） | L3 | 46 组 | ✅-L3 |
 | MS-11 | 配置校验 V1~V6：源数上限/id 规则/v1 顶层形态拒绝/跨源目标冲突/server_id 冲突/继承合并 | 全分支拒启或通过；v1 顶层形态报错并指引改写 sources[]（2026-11 移除自动包装） | L1+L3 | config 表驱动（multi_source_test.go）+ 35 组脚本分支 | ✅ |

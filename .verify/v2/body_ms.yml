@@ -1,0 +1,113 @@
+# 多源组主配置正文（cluster=ms-verify）：单进程双源聚合形态——
+# src-a（vf-src:13306 的 msa 库）+ src-b（vf-src2:13406 的 msb 库）→
+# 两源聚合写入同一目标实例 vf-dst:13307 的 ms_merged 库（不同表，V4 合法）；
+# 两源各发 RocketMQ（前缀 CDC_msa_/CDC_msb_ 不相交，MS-09）。
+config_version: 2
+cluster: ms-verify
+
+node: {}
+
+ha:
+  enabled: false
+  lease_ttl_seconds: 10
+  leader_check_interval_ms: 2000
+  resign_on_shutdown: true
+
+pipeline:
+  workers: 4
+  worker_queue_size: 4096
+  batch_size: 200
+  flush_interval_ms: 200
+  position_save_interval_ms: 2000
+
+stock:
+  lock_mode: auto
+  chunk_rows: 20        # 小块便于 MS-03 全量中断断言
+  throttle_ms: 0
+  workers: 2
+
+sources:
+  - id: src-a
+    source:
+      addr: 127.0.0.1:13306
+      user: root
+      password: "123456"
+      charset: utf8mb4
+      flavor: mysql
+      timezone: UTC
+      heartbeat_interval_ms: 3000
+      read_timeout_ms: 60000
+      exclude_schemas: [mysql, sys, information_schema, performance_schema]
+      use_gtid: true
+    targets:
+      mysql:
+        enabled: true
+        addr: 127.0.0.1:13307
+        user: root
+        password: "123456"
+        charset: utf8mb4
+        max_open_conns: 10
+        max_idle_conns: 5
+        conn_max_lifetime_min: 30
+        tx_chunk_rows: 100
+        target_database: ms_merged
+        ddl_sync: true
+      rocketmq:
+        enabled: true
+        name_servers: [127.0.0.1:8081]
+        group: gocdc-msa
+        topic_prefix: CDC_msa_
+        order_by: row
+        send_timeout_ms: 5000
+        send_concurrency: 16
+    rules:
+      - schema: msa
+        sinks: {mysql: true, rocketmq: true}
+        ddl_policy: pause
+        tables:
+          - {table: orders, order_by_column: id, do_stock: true}
+          - {table: evlog, order_by_column: id, do_stock: false}
+
+  - id: src-b
+    source:
+      addr: 127.0.0.1:13406
+      user: root
+      password: "123456"
+      charset: utf8mb4
+      flavor: mysql
+      timezone: UTC
+      heartbeat_interval_ms: 3000
+      read_timeout_ms: 60000
+      exclude_schemas: [mysql, sys, information_schema, performance_schema]
+      use_gtid: true
+    targets:
+      mysql:
+        enabled: true
+        addr: 127.0.0.1:13307
+        user: root
+        password: "123456"
+        charset: utf8mb4
+        max_open_conns: 10
+        max_idle_conns: 5
+        conn_max_lifetime_min: 30
+        tx_chunk_rows: 100
+        target_database: ms_merged
+        ddl_sync: true
+    rules:
+      - schema: msb
+        sinks: {mysql: true}
+        ddl_policy: pause
+        tables:
+          - {table: users, order_by_column: id, do_stock: true}
+          - {table: tlog, order_by_column: id, do_stock: false}
+
+observability:
+  metrics_addr: ${METRICS_ADDR}
+  web:
+    enabled: true
+    addr: ${WEB_ADDR}
+    username: admin
+    password: ${WEB_PASSWORD}
+    auth_disabled: false
+  log:
+    level: info
