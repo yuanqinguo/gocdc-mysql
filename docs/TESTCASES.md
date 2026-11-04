@@ -127,6 +127,10 @@
 | API-07（反方） | 未知路由 404 / 方法不匹配 405 | gin 默认语义不 5xx | L3 | §7 ADV-11 | ✅-L3 |
 | API-08 | /status 管线可见性（pipeline_state/pipeline_error/event_lag_seconds，P0） | 五态流转正确、paused 带 error、契约字段齐；**人工暂停透传 `pipeline_paused_by_op=true`，致命错误暂停时字段省略**（前端据此切换「恢复管线」入口） | L2+L3 | TestRouter_StatusPipelineFields + TestPipeline_SourceInvalidPositionFatal + 验收 A6 输出 | ✅ |
 | API-09 | **pipeline pause/resume 门禁与审计**（13 §3，2026-11-01 新增） | 无 confirm 400 且闭包不被调；confirm 受理恰调一次；未装配 500；闭包错误 500 带消息；pause/resume 写 `pipeline.pause`/`pipeline.resume` 审计（Web /audit + etcd events/audit 双通道） | L1+L3 | TestRouter_PipelinePauseResume / NotWired / PauseError + 验收 55 PP-01/05/09 | ✅ |
+| API-10 | **GET /config/raw + GET /sources/{sid}/rules（编辑种子）**（13 §8，2026-11-03 新增） | raw 回传原始 YAML+revision=ModRevision+config_key；rules 回组形态原样 JSON；file 形态双端点 409；未知源 404 | L1+L2 | TestRouter_ConfigRaw / TestRouter_GetRules（L1 fake）+ TestIntegrationConfigEdit ①⑥（L2 真 etcd） | ✅ |
+| API-11 | **PUT /sources/{sid}/rules 保存全链**（13 §8）：splice→校验→预检→CAS→审计 | 缺 confirm 400 / 缺 base 400 / base 陈旧 409 且不写 / 未知字段（平铺写法）400 带指引 / 空规则 400 / 预检错误 422 不写 / check_only 免 confirm 不写不审计 / 成功 200 新 revision；**etcd 正文：新 rules 落盘、`${ENV}` 占位原样、段外内容逐字节语义保留**；审计含 diff 摘要（冲突+成功各一条） | L1+L2+L3 | TestRouter_PutRules_Save / Rejections / CheckOnly + config rawedit 单测（注释/占位/引号三铁律）+ TestIntegrationConfigEdit ②③④⑤ | ✅ |
+| API-12 | **POST /config/apply-restart 重载**（13 §8） | 未接入 409；无 confirm 400；confirm 受理 200 且 Shutdown 恰触发一次（响应先行）；审计 `config.apply_restart` | L1 | TestRouter_ApplyRestart（applyRestartDelay 调短） | ✅ |
+| API-13 | **规则编辑前端纯逻辑**（ruleDraft） | 服务端组形态 JSON ⇄ 草稿往返无损（sinks 对象/bool 双形态、mask 对象/字符串双形态归一）；客户端必填校验（缺 order_by/重复库表/空 sink/空 tables）；exclude/mask 文本编解码；diff 摘要文案 | L1(web) | web/src/features/rules/ruleDraft.test.ts（9 用例，vitest） | ✅ |
 
 ## 7. 反方对抗验证记录（ADV，2026-10-29/30 真实环境执行）
 

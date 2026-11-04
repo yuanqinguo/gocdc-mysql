@@ -29,8 +29,12 @@
 - 重启进程 → onElected 检测无标记自动重跑全量（快照对 + 增量衔接）。
 
 ## 3. 新增表接入
-1. 改 etcd 配置（rules 加库级/表级规则）。
-2. 重启（配置不热更）。新表无 stock 标记 → 自动全量 → 增量接管。
+1. 改配置（rules 加库级/表级规则）：Web「规则页 → 编辑规则」（校验+活体预检+CAS
+   写配置中心，`PUT /api/v1/sources/{sid}/rules`）或 etcdctl 直改
+   `/gocdc/{cluster}/config`。
+2. 重启（配置不热更；Web 保存成功后可直接「应用并重启」=
+   `POST /api/v1/config/apply-restart?confirm=true`，优雅排空+位点终值+resign
+   后退出，由编排拉起）。新表无 stock 标记 → 自动全量 → 增量接管。
 
 ## 4. 源库主从切换
 - GTID 模式：自动续接（推荐生产开启）。
@@ -62,13 +66,19 @@ sink 配置变更 + 暂停 → 切换 → 恢复。位点不受影响。
 ## 9. 多源运维（配置 v2 sources[]）
 
 ### 9.1 多源配置变更 / 新增源
-1. 改 etcd `/gocdc/{cluster}/config`（v2 YAML：`sources[]` 数组）→ 滚动重启
-   生效（不热更，现行口径）。
-2. 新增源 = 配置加一项 + 重启：新源首启自动全量，其余源照常（各源独立全量，
-   不存在「等最慢源」屏障）。
-3. 跨源目标不相交在启动校验期拦死（MySQL 三元组/Kafka topic/RocketMQ topic
+1. 改配置：Web 编辑（`PUT /api/v1/sources/{sid}/rules`，按源整组提交，服务端
+   全量校验 + 活体预检 + ModRevision CAS 防并发覆盖）或 etcdctl 直改
+   `/gocdc/{cluster}/config`（v2 YAML：`sources[]` 数组）→ 滚动重启生效
+   （不热更，现行口径）。
+2. **集群滚动重启顺序**：先逐个重启 follower（带新配置回来当热备），最后重启
+   leader（`POST /api/v1/config/apply-restart?confirm=true` 或编排层重启）。
+   顺序颠倒不产生数据风险（旧配置=少同步，安全方向），只浪费一轮重启。
+3. 新增源 = 配置加一项 + 重启：新源首启自动全量，其余源照常（各源独立全量，
+   不存在「等最慢源」屏障）。**Web 编辑只覆盖既有源的 rules 段**；加源/改
+   source/target 连接仍走 etcdctl/配置文件（编辑端点对 file 形态显式 409）。
+4. 跨源目标不相交在启动校验期拦死（MySQL 三元组/Kafka topic/RocketMQ topic
    冲突即拒启）——两个源写同一个 topic/目标表属配置错误。
-4. 同一源实例被两个源订阅：server_id 必须显式互异（校验强制），否则互踢。
+5. 同一源实例被两个源订阅：server_id 必须显式互异（校验强制），否则互踢。
 
 ### 9.2 单源故障处置
 - 定位：`/status` sources[] 或 `gocdc_source_up{source}=0` / `gocdc_sources{state="failed"}`。

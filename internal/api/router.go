@@ -70,6 +70,19 @@ type Deps struct {
 	SourceStatuses func() []SourceStatus
 	// SourceList 源清单统计（GET /sources：地址/规则/表数/sink 集/状态摘要）。
 	SourceList func() []SourceSummary
+
+	// ── 配置编辑与重载（13 §3；etcd 形态注入，file 形态保持 nil → 409）──
+	// ConfigStore 配置中心原始正文读写（PUT rules 的 read→splice→validate→
+	// preflight→CAS 链服务端底座）。
+	ConfigStore ConfigStore
+	// Preflight 活体预检闭包（源/目标连接核对本次变更表；nil = 跳过并在
+	// 报告注明）。
+	Preflight PreflightFunc
+	// Shutdown 优雅停机触发（SIGTERM 同链路：停拉取→排空→位点终值→resign，
+	// 编排拉起应用新配置；nil = 未接入 → 409）。
+	Shutdown func()
+	// ConfigKey 配置中心 key（etcd 形态展示用）。
+	ConfigKey string
 }
 
 // apiHandlers 各端点 handler 载体：持有 Deps 只读引用，按资源拆分到同包
@@ -104,10 +117,12 @@ func NewRouter(deps Deps, auth AuthConfig) *gin.Engine {
 	api.GET("/ddl-events", h.ddlEventsAll)
 	api.GET("/audit", h.auditList)
 	api.GET("/config", h.config)
+	api.GET("/config/raw", h.configRaw)
 
 	// ── 只读（源作用域）──
 	api.GET("/sources/:sid/status", h.sourceStatus)
 	api.GET("/sources/:sid/position", h.sourceGetPosition)
+	api.GET("/sources/:sid/rules", h.sourceGetRules)
 	api.GET("/sources/:sid/rules/effective", h.sourceEffectiveRules)
 	api.GET("/sources/:sid/ddl-events", h.sourceDDLEvents)
 
@@ -118,12 +133,14 @@ func NewRouter(deps Deps, auth AuthConfig) *gin.Engine {
 	api.POST("/sources/:sid/ddl/:event_id/approve", h.sourceSettleDDL(pipeline.DecisionApprove))
 	api.POST("/sources/:sid/ddl/:event_id/skip", h.sourceSettleDDL(pipeline.DecisionSkip))
 	api.POST("/sources/:sid/rules/by-schema/:schema/:table/restock", h.sourceRestock)
+	api.PUT("/sources/:sid/rules", h.sourcePutRules) // check_only 预检免 confirm
 	api.POST("/sources/:sid/pipeline/pause", h.sourcePausePipeline)
 	api.POST("/sources/:sid/pipeline/resume", h.sourceResumePipeline)
 	api.POST("/sources/:sid/verify", h.sourceVerify)
 
 	// ── 写操作（cluster 级）──
 	api.POST("/leader/resign", h.resign)
+	api.POST("/config/apply-restart", h.applyRestart)
 
 	// The static shell is public so it can collect credentials. Unknown API paths
 	// still follow the Basic auth boundary and never fall through to index.html.

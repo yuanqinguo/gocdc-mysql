@@ -141,3 +141,58 @@ export interface SetPositionRequest {
   pos: number
   confirm: 'SET-POSITION'
 }
+
+// ── 规则编辑（配置中心 CAS 写，PUT /sources/{sid}/rules）──
+
+/** GET /config/raw 出参（原始 YAML + CAS base；file 形态 409） */
+export interface ConfigRawData {
+  revision: number
+  yaml: string
+  config_key: string
+}
+
+/** 表定位（diff 结果项） */
+export interface TableRef {
+  schema: string
+  table: string
+}
+
+/** 活体预检结果：errors 非空 = 保存被阻断 */
+export interface PreflightReport {
+  checked: number
+  errors: string[]
+  warnings: string[]
+}
+
+/** PUT 保存 / check_only 共用出参 */
+export interface PutRulesResult {
+  revision: number
+  added: TableRef[]
+  removed: TableRef[]
+  modified: TableRef[]
+  report: PreflightReport
+}
+
+/** GET /sources/{sid}/rules 出参（组形态原样 + PUT base） */
+export interface GetRulesResult {
+  revision: number
+  rules: RuleGroup[]
+}
+
+/** 组形态规则（服务端 JSON 形态；sinks 为 {enabled,...} 对象或 bool） */
+export interface RuleGroup {
+  schema: string
+  sinks?: Partial<Record<'mysql' | 'kafka' | 'rocketmq', boolean | { enabled: boolean; topic?: string; tag?: string }>>
+  ddl_policy?: string
+  target_database?: string
+  tables: RuleTable[]
+}
+
+export interface RuleTable {
+  table: string
+  order_by_column?: string
+  do_stock?: boolean
+  target_database?: string
+  exclude_columns?: string[]
+  mask_columns?: Record<string, string | { type: string; value?: string; keep?: number; salt_env?: string }>
+}

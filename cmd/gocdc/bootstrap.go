@@ -37,15 +37,15 @@ func connectEtcdAddrs(addrs []string) (*clientv3.Client, *etcdx.KV, func(), erro
 // resolveStartupAndLoadConfig 启动裁决 + 配置加载：flag > 引导文件（工作目录
 // config.local.yml）> 报错；
 // config_source=etcd 时先连配置中心（与协调面可不同实例），file 形态零 etcd
-// 依赖读文件。返回生效启动参数、全量配置、配置 key 与配置中心清理函数
-// （file 形态为 no-op）。
-func resolveStartupAndLoadConfig(ctx context.Context, opts *options) (*config.Startup, *config.Config, string, func(), error) {
+// 依赖读文件。返回生效启动参数、全量配置、配置 key、配置中心 KV（Web 配置
+// 编辑复用该常驻客户端；file 形态为 nil）与清理函数。
+func resolveStartupAndLoadConfig(ctx context.Context, opts *options) (*config.Startup, *config.Config, string, *etcdx.KV, func(), error) {
 	st, err := config.ResolveStartup(config.StartupFlags{
 		Cluster: opts.cluster, Etcd: opts.etcdAddrs,
 		ConfigKey: opts.configKey, ConfigFile: opts.configFile,
 	}, config.DefaultBootstrapFile)
 	if err != nil {
-		return nil, nil, "", nil, err
+		return nil, nil, "", nil, nil, err
 	}
 
 	var cfgKV *etcdx.KV
@@ -54,16 +54,16 @@ func resolveStartupAndLoadConfig(ctx context.Context, opts *options) (*config.St
 		// 客户端引用由 etcdx.KV 持有；closeCfg 负责关闭
 		_, cfgKV, closeCfg, err = connectEtcdAddrs(st.ConfigCenterAddrs)
 		if err != nil {
-			return nil, nil, "", nil, fmt.Errorf("配置中心 etcd 连接失败: %w", err)
+			return nil, nil, "", nil, nil, fmt.Errorf("配置中心 etcd 连接失败: %w", err)
 		}
 	}
 
 	cfg, cfgKey, lerr := loadConfig(ctx, &st, cfgKV)
 	if lerr != nil {
 		closeCfg()
-		return nil, nil, "", nil, lerr
+		return nil, nil, "", nil, nil, lerr
 	}
-	return &st, cfg, cfgKey, closeCfg, nil
+	return &st, cfg, cfgKey, cfgKV, closeCfg, nil
 }
 
 // loadConfig 配置加载：file 形态读引导文件本身，etcd 形态读配置中心 key

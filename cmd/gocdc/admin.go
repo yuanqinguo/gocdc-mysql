@@ -19,6 +19,7 @@ import (
 
 	"gocdc/internal/api"
 	"gocdc/internal/config"
+	"gocdc/internal/etcdx"
 	"gocdc/internal/logging"
 	"gocdc/internal/model"
 	"gocdc/internal/pipeline"
@@ -109,9 +110,11 @@ func buildSourceDeps(rt *app, src *sourceState) *api.SourceDeps {
 // buildAdminDeps 组装路由依赖（13 §3 + 多源 PRD 06 §1.5）：
 //   - Elector/Resign 由 run() 在 elector 就绪后补挂（避免装配顺序耦合）；
 //   - Sources 表：sid → 该源闭包集（装配期固定只读）；
-//   - SourceStatuses/SourceList：/status 与 /sources 的数据源（cmd 原子读源表）。
-func buildAdminDeps(st *config.Startup, cfg *config.Config, cfgKey string,
-	coord *coordination, rt *app) api.Deps {
+//   - SourceStatuses/SourceList：/status 与 /sources 的数据源（cmd 原子读源表）；
+//   - ConfigStore/Preflight/Shutdown：配置编辑与重载（13 §3；etcd 形态才有
+//     ConfigStore，file 形态 nil → 端点 409）。
+func buildAdminDeps(st *config.Startup, cfg *config.Config, cfgKey string, cfgKV *etcdx.KV,
+	coord *coordination, rt *app, stop context.CancelFunc) api.Deps {
 
 	// prefix=集群前缀（NewAuditStore 契约，内部自拼 /events/audit）——此前多传
 	// 一段导致真实 key 双重拼接为 {prefix}/events/audit/events/audit（55 组
@@ -127,6 +130,13 @@ func buildAdminDeps(st *config.Startup, cfg *config.Config, cfgKey string,
 		ConfigJSON: maskConfigJSON(cfg),
 		Audit:      auditStore,
 		Sources:    make(map[string]*api.SourceDeps, len(cfg.Sources)),
+
+		Preflight: rt.preflightRules,
+		Shutdown:  stop,
+	}
+	if st.ConfigSource == "etcd" && cfgKV != nil {
+		deps.ConfigStore = api.NewEtcdConfigStore(cfgKV, cfgKey)
+		deps.ConfigKey = cfgKey
 	}
 	for _, src := range rt.sources.all() {
 		sd := buildSourceDeps(rt, src)

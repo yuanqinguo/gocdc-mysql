@@ -102,7 +102,7 @@ func run(opts *options) error {
 	// ⓪①② 启动裁决 + 配置加载（flag > 引导文件 config.local.yml >
 	// 报错；config_source=etcd 时先连配置中心——与协调面可不同实例，file 形态
 	// 零 etcd 依赖读文件本体）
-	st, cfg, cfgKey, closeCfg, err := resolveStartupAndLoadConfig(ctx, opts)
+	st, cfg, cfgKey, cfgKV, closeCfg, err := resolveStartupAndLoadConfig(ctx, opts)
 	if err != nil {
 		return err
 	}
@@ -164,8 +164,8 @@ func run(opts *options) error {
 		}
 	}()
 
-	// ⑦ admin API（依赖注入；单源视图过渡形态——多源路由随 PRD P3 落地）
-	webDeps := buildAdminDeps(st, cfg, cfgKey, coord, rt)
+	// ⑦ admin API（依赖注入；stop 注入 = apply-restart 复用 SIGTERM 同链路）
+	webDeps := buildAdminDeps(st, cfg, cfgKey, cfgKV, coord, rt, stop)
 
 	var runErr error
 	if cfg.HA.ClusterEnabled() {

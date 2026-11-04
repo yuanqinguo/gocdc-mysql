@@ -2,7 +2,6 @@ package config
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 
@@ -47,27 +46,7 @@ func Load(ctx context.Context, cfgFile, etcdKey, flagCluster string, kv *etcdx.K
 		}
 		raw = resp.Kvs[0].Value
 	}
-
-	tree, perr := parseYAML(raw)
-	if perr != nil {
-		return LoadResult{Errors: []error{perr}}
-	}
-	resolved, envErrs := ResolveEnv(tree)
-	normalized, normErrs := normalizeTree(resolved)
-	buf, err := json.Marshal(normalized)
-	if err != nil {
-		return LoadResult{Errors: append(envErrs, fmt.Errorf("配置重新编码失败: %w", err))}
-	}
-	var cfg Config
-	if err := json.Unmarshal(buf, &cfg); err != nil {
-		return LoadResult{Errors: append(envErrs, fmt.Errorf("配置结构解析失败: %w", err))}
-	}
-
-	errs := append([]error{}, envErrs...)
-	errs = append(errs, normErrs...)
-	ApplyDefaults(&cfg)
-	errs = append(errs, Validate(&cfg, flagCluster)...)
-	return LoadResult{Config: &cfg, Errors: errs}
+	return LoadFromRaw(raw, flagCluster)
 }
 
 // parseYAML 把配置正文按 YAML 解析为通用树（唯一支持格式）。空文档（全空白

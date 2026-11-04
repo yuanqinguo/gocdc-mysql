@@ -4,9 +4,12 @@ import type {
   AuditEntry,
   DDLRecord,
   EffectiveRule,
+  GetRulesResult,
   MigrateFilePosResult,
   MigrateGTIDResult,
   PositionData,
+  PutRulesResult,
+  RuleGroup,
   SetPositionRequest,
   SourceStatus,
   SourceSummary,
@@ -195,5 +198,31 @@ export class ApiClient {
   /** 该源 GTID → file:pos 反向迁移（位点置最老 binlog 头，接受重放）。 */
   migrateFilePosOf(sid: string) {
     return this.request<MigrateFilePosResult>(this.sourcePath(sid, '/position/migrate-filepos?confirm=true'), { method: 'POST' })
+  }
+
+  // ── 规则编辑（配置中心 CAS 写；file 形态 409 由调用方按 ApiError.status 处理）──
+
+  /** 该源规则组原样（组形态；revision 作 PUT base）。 */
+  getRulesOf(sid: string, signal?: AbortSignal) {
+    return this.request<GetRulesResult>(this.sourcePath(sid, '/rules'), { signal })
+  }
+
+  /**
+   * 保存该源规则组（整组提交）。
+   * @param base 读到的 revision——服务端 CAS，不一致返回 409（ApiError）。
+   * @param checkOnly true = 预检预演（免 confirm、不写）。
+   */
+  putRulesOf(sid: string, base: number, rules: RuleGroup[], checkOnly: boolean) {
+    const query = checkOnly ? 'check_only=true' : `confirm=true&base=${base}`
+    return this.request<PutRulesResult>(this.sourcePath(sid, `/rules?${query}`), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rules }),
+    })
+  }
+
+  /** 优雅排空退出（位点终值+resign），由编排拉起以应用新配置。 */
+  applyRestart() {
+    return this.request<void>('/config/apply-restart?confirm=true', { method: 'POST' })
   }
 }

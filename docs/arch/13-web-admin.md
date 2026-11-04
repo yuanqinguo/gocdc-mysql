@@ -42,6 +42,8 @@ internal/api/   # API 实现（web/ = 前端源码，internal/api = 后端）
 | `GET /nodes` | 集群节点（etcd nodes 前缀 + 选举信息） |
 | `GET /ddl-events` | 最近 DDL 事件与处置记录（etcd events/ddl） |
 | `GET /config` | 当前生效配置（密码打码）+ etcd 中的待生效配置 diff |
+| `GET /config/raw` | **配置中心原始 YAML 正文 + CAS base**（`{revision, yaml, config_key}`；revision=该 key 的 ModRevision，作 PUT base）。file 形态 409（指引直接编辑文件——本地文件含明文密码不经 API 回传） |
+| `GET /sources/{sid}/rules` | 该源规则组原样 JSON（组形态，`{revision, rules}`）——编辑器种子数据，与 PUT 提交形态对称 |
 
 ### 操作（写，需二次确认参数 `confirm=true`；鉴权=全局 Basic 单凭据）
 
@@ -56,6 +58,8 @@ internal/api/   # API 实现（web/ = 前端源码，internal/api = 后端）
 | `POST /ddl/{event_id}/approve` \| `/skip` | DDL 审批（08 §5） |
 | `POST /verify` | 抽样对账：body `{database, table, pk?, sample?}`，返回 `{src_count, tgt_count, checked, mismatch, diffs[]}`；数据差异是正常结果（code=0 看 mismatch），500 仅基础设施故障。对账唯一入口（无 CLI 子命令——Docker 部署下运维操作一律走 Web，无需进节点） |
 | `PUT /config` | 写回 etcd 配置（提示需重启生效；不做热更） |
+| `PUT /sources/{sid}/rules` | **规则编辑保存（配置 UI 的服务端链路）**：body `{rules:[...]}` 整组提交（非 diff patch）。服务端全链：读原始正文 → **yaml.Node 层手术**（只替换该源 rules 段——严禁 struct 往返，`${ENV}` 占位/注释/键序原样保留）→ `LoadFromRaw` 全量校验（同一校验器）→ **活体预检**（diff 出新增/修改表，源表存在性/order_by/目标表列集与唯一键一致，errors 阻断 422）→ ModRevision **CAS 写**（`?base=<revision>` 缺失 400、不一致 409「配置已被他人修改，请刷新」）→ 审计 `config.update_rules`。`?check_only=true` = 同链路预演（免 confirm、不写、不审计）。file 形态 409。出参 `{revision, added, removed, modified, report}` |
+| `POST /config/apply-restart` | **应用并重启本节点**：优雅排空退出（与 SIGTERM 同一条 drain 链路：停拉取→排空→位点终值落盘→resign），exit 0 交编排拉起应用新配置（compose `restart: unless-stopped` / k8s 均满足）。confirm=true + 审计 `config.apply_restart`。集群滚动序 = 先 follower 后 leader（顺序错无数据风险只白重启——旧配置=少同步，安全方向）。响应先写出再异步触发停机 |
 | `POST /leader/resign` | 主动让位（滚动发布用） |
 | `POST /pipeline/pause` | **人工暂停管线**：写 etcd 持久标志 `{prefix}/pipeline-pause`（无 lease，跨重启/失位保持）+ 取消管线 ctx 走优雅停机（排空 + 位点终值落盘）。管线停止但进程/Leader/Web 存活（DDL 审批 gate 继续服务）；当选时发现标志存在则本任期不启动管线。用途：运维窗口（改位点/排查）不用停进程。非 leader 返回错误 |
 | `POST /pipeline/resume` | **恢复人工暂停的管线**：删持久标志 + 等旧流程退出后从 etcd 位点重走全量检查/增量启动（支持暂停期间改位点）。非 leader / 非暂停态返回错误 |
@@ -73,10 +77,10 @@ etcd 治理（P2，leader 侧 `gcLoop` 每小时）：① stock 死标记（白�
 | 页面 | 当前可实现内容 | 后端 API 状态 |
 |------|------|------|
 | Dashboard | 角色、leader、term、版本、配置来源、uptime、位点摘要；复杂趋势引导 Grafana | `/status`、`/position` 已有；`/overview` 尚未实现 |
-| Pipelines / 规则 | `/rules/effective` 生效视图；已支持的单表 restock 与抽样 verify | 生效规则/restock/verify 已有；运行状态、暂停/恢复、每规则 metrics 尚未实现 |
+| Pipelines / 规则 | `/rules/effective` 生效视图；**规则编辑**（表格化增删改 → 预检 → diff 确认 → CAS 保存 → 应用并重启）；单表 restock 与抽样 verify | 生效规则/restock/verify/编辑（GET+PUT `/sources/{sid}/rules`）/apply-restart 已有；运行状态、每规则 metrics 尚未实现 |
 | DDL Events | pending DDL、SQL、审批/跳过及语义提示 | `/ddl-events`、approve、skip 已有 |
 | Position | 当前位点与危险修改表单 | GET/POST `/position` 已有 |
-| Config | 打码后生效配置与「每表生效规则」只读标签页 | `/config`、`/rules/effective` 已有；etcd 配置编辑/diff 尚未实现 |
+| Config | 打码后生效配置与「每表生效规则」只读标签页 | `/config`、`/rules/effective` 已有；整体配置（非 rules 段）编辑尚未实现 |
 | Audit | 最近审计记录 | `/audit` 已有 |
 | Full Sync / Nodes | 当前版本不展示伪造状态或无效操作 | `/stock`、`/nodes` 尚未实现 |
 
@@ -115,3 +119,23 @@ etcd 治理（P2，leader 侧 `gcLoop` 每小时）：① stock 死标记（白�
 - **前端**：源作用域是路由级状态（URL query `?source={sid}`，刷新/书签/分享
   保持作用域）；顶栏源选择器（单源部署隐藏）；总控台聚合视图（汇总条 + 源
   卡片栅格 + 各页按源切分）；react-query key 全部含 sid（缓存隔离）。
+
+## 8. 配置编辑与重载（rules CRUD 进 UI）
+
+高频配置变更（加表/减表/改 mask/exclude）的 Web 化闭环，2026-11 落地：
+
+- **保存链路**（`PUT /sources/{sid}/rules`）：规则段 yaml.Node 手术合并 →
+  同一校验器全量校验 → 活体预检（只核对本次新增/修改表——存量表上次启动
+  核对已把关；源/目标连接为独立短连接，不依赖装配态）→ CAS 写配置中心 →
+  审计。**不做热更**：保存只落配置中心，重启才生效——`POST
+  /config/apply-restart` 复用 SIGTERM 的 drain 链路（位点终值是排空的自然
+  产物，无独立「保存位点」动作）。
+- **风险方向不对称**（锁定 source/target 的依据）：rules 改错=少同步/晚同步
+  （可补救），target 连接改错=写错库（不可逆）——后者保持锁定（只读展示+
+  连接测试例外，未实现）。加库（新规则组）走编辑端点；加源（新 source 连接）
+  仍走配置中心直改。
+- **正文手术三铁律**（实现约束，internal/config rawedit）：① merge 在未解析
+  的原始字节上做（ResolveEnv 解析副本只用于校验，绝不能反序列化回写——否则
+  `${ENV}` 变明文进配置中心）；② 段外注释/键序/引号风格保留；③ 危险枚举
+  （mask type=null 等）写出时保持引号防 YAML 字面量。被编辑组的内部注释随
+  重写丢失（该组本身是 UI 产物）。

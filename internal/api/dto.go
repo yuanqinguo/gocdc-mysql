@@ -3,6 +3,7 @@ package api
 import (
 	"time"
 
+	"gocdc/internal/config"
 	"gocdc/internal/pipeline"
 )
 
@@ -148,6 +149,45 @@ type VerifyRequest struct {
 	Sample   int    `json:"sample"` // 0 = verify 包默认抽样数
 }
 
+// ConfigRawData GET /config/raw 出参：配置中心原始 YAML 正文（未解析，
+// ${ENV} 占位原样）+ CAS base（该 key 的 ModRevision）。file 形态 409。
+type ConfigRawData struct {
+	Revision  int64  `json:"revision"`
+	YAML      string `json:"yaml"`
+	ConfigKey string `json:"config_key"`
+}
+
+// PutRulesRequest PUT /sources/:sid/rules body：该源全部规则组整组提交
+// （非 diff patch）。Rule/TableRule 的严格解码（未知字段报错）随结构体
+// 自带的 UnmarshalJSON 生效。
+type PutRulesRequest struct {
+	Rules []config.Rule `json:"rules"`
+}
+
+// GetRulesResult GET /sources/:sid/rules 出参：该源规则组原样 + PUT base。
+type GetRulesResult struct {
+	Revision int64         `json:"revision"`
+	Rules    []config.Rule `json:"rules"`
+}
+
+// PutRulesResult PUT 出参（check_only 与保存共用）。
+type PutRulesResult struct {
+	// Revision 保存后的新 revision（check_only 恒 0——未写）。
+	Revision int64             `json:"revision"`
+	Added    []config.TableRef `json:"added"`
+	Removed  []config.TableRef `json:"removed"`
+	Modified []config.TableRef `json:"modified"`
+	Report   *PreflightReport  `json:"report"`
+}
+
+// PreflightReport 活体预检结果：errors 非空 = 保存被阻断（422）；
+// warnings 展示但放行。
+type PreflightReport struct {
+	Checked  int      `json:"checked"`
+	Errors   []string `json:"errors"`
+	Warnings []string `json:"warnings"`
+}
+
 // DefaultPK verify 未指定主键列时的缺省值。
 const DefaultPK = "id"
 
@@ -188,6 +228,10 @@ const (
 	// 人工暂停/恢复管线（13 §3）：暂停=优雅停管线保持 Leader；持久标志在 etcd。
 	auditPipelinePause  = "pipeline.pause"
 	auditPipelineResume = "pipeline.resume"
+
+	// 规则编辑与重载（配置中心 CAS 写 + 优雅排空退出，13 §3）。
+	auditConfigRulesUpdate  = "config.update_rules"
+	auditConfigApplyRestart = "config.apply_restart"
 
 	noteWebApprove = "web approve"
 	noteWebSkip    = "web skip"

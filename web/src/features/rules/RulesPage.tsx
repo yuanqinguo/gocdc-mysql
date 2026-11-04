@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { App as AntApp, Button, Collapse, Form, Input, InputNumber, Modal } from 'antd'
+import { App as AntApp, Button, Collapse, Form, Input, InputNumber, Modal, Space } from 'antd'
 import { CheckCircleOutlined, DatabaseOutlined, ReloadOutlined, WarningOutlined } from '@ant-design/icons'
 import { useMutation, useQueries, useQueryClient } from '@tanstack/react-query'
 import { useApi } from '@/app/api'
@@ -10,6 +10,7 @@ import { Callout } from '@/shared/components/Callout'
 import { ErrorState, LoadingState } from '@/shared/components/PageState'
 import { PageHeader } from '@/shared/components/PageHeader'
 import { RuleExplorer } from './RuleExplorer'
+import { RuleEditor } from './RuleEditor'
 
 export function RulesPage() {
   const { currentSid } = useSourceScope()
@@ -20,12 +21,13 @@ export function RulesPage() {
   return effectiveSid ? <SingleSourceRules sid={effectiveSid} /> : <AllSourcesRules />
 }
 
-/** 单源视图：该源生效规则 + 重跑/对账操作。 */
+/** 单源视图：该源生效规则 + 重跑/对账操作 + 规则编辑（配置中心 CAS 写）。 */
 function SingleSourceRules({ sid }: { sid: string }) {
   const { data: rules = [], isPending, error, refetch } = useEffectiveRules(sid)
   const { data: ddlEvents = [] } = useDDLEvents(sid)
   const [verifyRule, setVerifyRule] = useState<EffectiveRule | null>(null)
   const [verifyResult, setVerifyResult] = useState<VerifyResult | null>(null)
+  const [editorOpen, setEditorOpen] = useState(false)
   const [form] = Form.useForm<{ pk: string; sample: number }>()
   const api = useApi()
   const queryClient = useQueryClient()
@@ -65,15 +67,19 @@ function SingleSourceRules({ sid }: { sid: string }) {
       eyebrow={`复制 / 规则目录 · 源 ${sid}`}
       title="复制规则"
       description={`源「${sid}」组形态白名单的库级摘要与逐表生效视图；列表来自后端编译产物，前端不做继承推算。`}
-      extra={<Button icon={<ReloadOutlined />} onClick={() => void refetch()}>刷新</Button>}
+      extra={<Space>
+        <Button type="primary" onClick={() => setEditorOpen(true)}>编辑规则</Button>
+        <Button icon={<ReloadOutlined />} onClick={() => void refetch()}>刷新</Button>
+      </Space>}
     />
     <Callout tone="info" title="规则视图说明">
-      点击源库下钻查看该库全部表规则；当前接口提供规则视图与单表重跑/抽样对账，规则运行状态、暂停/恢复操作尚未由后端 API 提供。
+      点击源库下钻查看该库全部表规则；「编辑规则」保存到配置中心（校验+活体预检+CAS），重启进程后生效。
     </Callout>
     {error ? <ErrorState error={error} onRetry={() => void refetch()} /> : isPending ? <LoadingState /> : (
       <RuleExplorer rules={rules} pendingDDL={ddlEvents} showActions
         onRestock={confirmRestock} onVerify={openVerify} actionPending={restock.isPending} />
     )}
+    <RuleEditor sid={sid} open={editorOpen} onClose={() => setEditorOpen(false)} />
     <VerifyModal
       verifyRule={verifyRule}
       verifyResult={verifyResult}
