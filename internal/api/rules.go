@@ -46,8 +46,9 @@ func summarizeMasks(in map[string]model.MaskSpec) map[string]EffectiveMaskSpec {
 	return out
 }
 
-// restockOf 源作用域全量重跑（POST restock，源作用域）：只清该源标记，
-// 重启后仅该源该表重扫（多源 PRD 05 §4-4）。
+// restockOf 源作用域全量重跑（POST restock，源作用域）：清该表全量标记并
+// 自动触发该源流程重走（排空 → 重扫无 done 标记表 → 增量从新快照位点续接，
+// PRD 06 §5）——调用瞬间失位则由接管节点兜底（标记已清，当选必重扫）。
 func (h apiHandlers) restockOf(sd *SourceDeps, c *gin.Context, schema, table string) {
 	if !requireConfirm(c) {
 		return

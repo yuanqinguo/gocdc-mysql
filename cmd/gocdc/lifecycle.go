@@ -532,3 +532,60 @@ func (a *app) resumeSourcePipeline(ctx context.Context, src *sourceState) error 
 	go a.runSourceFlow(lc.ctx, src, lc.info)
 	return nil
 }
+
+// restockDrainWait restock 触发重走时等待旧源流程排空的上界（与 resume 的
+// 15s 同款；var 以便测试调短）。
+var restockDrainWait = 15 * time.Second
+
+// restockRestart restock 的兑现路径（清标记后调用）：触发该源流程重走——
+// runSourceFlow 头部 runStock 对无 done 标记的表整表重扫，随后增量从新快照
+// 位点续接。分态：
+//   - 暂停态 → resumeSourcePipeline（删持久标志重走，恢复即重扫）；
+//   - 运行态 → 取消源流程走优雅排空（停拉取→排空→位点终值落盘），等完全
+//     退出后复用当任任期重走；
+//   - 致命停源（槽空）→ 直接重走。
+//
+// 绝不写持久暂停标志：取消到排空完成的窗口里若失位，接管节点会因无 done
+// 标记自动重扫，留标志反而把下一任 leader 挡在暂停闸外。本节点已失位则
+// 返回说明性错误（标记已清即为兑现，重扫由接管节点执行）。
+func (a *app) restockRestart(ctx context.Context, src *sourceState) error {
+	if src.opPaused.Load() { // 暂停态：恢复即重走（resume 护栏只认 opPaused）
+		return a.resumeSourcePipeline(ctx, src)
+	}
+	src.pipeMu.Lock()
+	cancelFn, done := src.pipeCancel, src.pipeDone
+	src.pipeMu.Unlock()
+	if cancelFn != nil { // 运行态：取消 → 优雅排空协议接管（位点终值落盘）
+		logging.L().Info("restock 触发该源流程重走（排空 → 重扫无 done 标记表 → 续增量）",
+			zap.String("source", src.sid))
+		cancelFn()
+		if done != nil {
+			// 与 resumeSourcePipeline 同款：只以定时器封顶，不等调用方 ctx——
+			// HTTP 客户端断开不得让重走半途丢弃（位点终值照常落盘）
+			select {
+			case <-done:
+			case <-time.After(restockDrainWait):
+				return errors.New("源管线排空未完成（位点落盘中），标记已清；请稍后重试 restock 或重启进程完成重扫")
+			}
+		}
+		// 排空窗口内可能有人按下人工暂停（pause 复用同一 cancel + 写持久标志，
+		// opPaused 由 pause 闭包置位）：此时不重走——重走流程会被暂停闸拦下
+		// 白跑一趟，且 restock 不得覆盖暂停意图。标记已清，resume 恢复即重扫。
+		if src.opPaused.Load() {
+			return errors.New("排空期间该源被转入人工暂停；标记已清，执行恢复（resume）时将自动重扫该表")
+		}
+	}
+	if a.sess != nil {
+		select {
+		case <-a.sess.Done(): // lease 已失效——重扫由接管节点执行（标记已清）
+			return errors.New("本节点 etcd 会话已失效；标记已清，接管节点当选后将自动重扫该表")
+		default:
+		}
+	}
+	lc := a.leadCtxRef.Load()
+	if lc == nil {
+		return errors.New("本节点已失位；标记已清，接管节点当选后将自动重扫该表")
+	}
+	go a.runSourceFlow(lc.ctx, src, lc.info)
+	return nil
+}

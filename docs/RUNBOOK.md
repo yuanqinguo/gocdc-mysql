@@ -25,8 +25,15 @@
 4. 重启进程 → 从新位点重放 → MySQL upsert / MQ 消费端按 event_id 去重消化重复。
 
 ## 2. 强制重跑全量（restock）
-- Web `POST /api/v1/rules/{db.table}/restock?confirm=true` → 清标记。
-- 重启进程 → onElected 检测无标记自动重跑全量（快照对 + 增量衔接）。
+- Web `POST /api/v1/sources/{sid}/rules/by-schema/{schema}/{table}/restock?confirm=true`
+  → 清该表标记并**自动触发该源重走**：排空当前管线（位点终值落盘）→ 重扫
+  无 done 标记表（全量，快照对先行持久化）→ 从新快照位点续接增量。无需再
+  重启进程；源处于人工暂停态时走 resume 闭环（恢复即重扫）。
+- 目标端为幂等 upsert（INSERT ... ON DUPLICATE KEY UPDATE）：重扫按快照值
+  覆盖已有行、补插缺失行，目标表无空窗；但**不删除「目标有、源没有」的行**
+  ——目标含幽灵行（污染/断档期删行）时先手工清理目标表，或按 §1 位点回拨。
+- 排空超时（>15s）会返回错误并保留清标记结果：稍后重试 restock 或重启进程
+  完成重扫。调用瞬间失位无需重试——接管节点当选后对无标记表自动重扫。
 
 ## 3. 新增表接入
 1. 改配置（rules 加库级/表级规则）：Web「规则页 → 编辑规则」（校验+活体预检+CAS

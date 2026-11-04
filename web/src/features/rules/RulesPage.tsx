@@ -34,9 +34,18 @@ function SingleSourceRules({ sid }: { sid: string }) {
   const { message, modal } = AntApp.useApp()
   const restock = useMutation({
     mutationFn: (rule: EffectiveRule) => api.restockOf(sid, rule.schema, rule.table),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: queryKeys.rules(sid) })
-      void message.success('已重置该表的全量标记。')
+    onSuccess: async (_res, rule) => {
+      // 重跑会重启该源管线（排空→全量回放→续增量）：状态类查询一并失效，
+      // 让总控台/状态页立即反映「全量回放」，而不是等轮询周期
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.rules(sid) }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.status }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.sources }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.sourceStatus(sid) }),
+      ])
+      void message.success(
+        `已重置 ${rule.schema}.${rule.table} 的全量标记并触发该源重走：管线进入「全量回放」后重扫该表，完成后续接增量。`,
+      )
     },
     onError: (e) => void message.error(e.message),
   })
@@ -50,7 +59,12 @@ function SingleSourceRules({ sid }: { sid: string }) {
   const confirmRestock = (rule: EffectiveRule) => {
     modal.confirm({
       title: '确认重跑全量同步？',
-      content: <span>将重置源「{sid}」的 <b>{rule.schema}.{rule.table}</b> 全量标记。请先确认目标表状态和下游负载。</span>,
+      content: <span>
+        将重置源「{sid}」的 <b>{rule.schema}.{rule.table}</b> 全量标记，并自动重启该源同步管线：排空 → 全量重扫（无 done 标记表）→ 从新快照位点续接增量。
+        操作会等待当前管线排空后才返回（最多约 15 秒），期间请不要重复提交。
+        目标端为幂等 upsert，已有行按快照值覆盖；重扫不会删除「目标有、源没有」的行。
+        请先确认目标表状态和下游负载。
+      </span>,
       okText: '确认重跑', okButtonProps: { danger: true }, cancelText: '取消',
       onOk: () => restock.mutateAsync(rule),
     })

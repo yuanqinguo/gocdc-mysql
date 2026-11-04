@@ -199,7 +199,7 @@ function tableColumns(
     columns.push({
       title: '操作', key: 'actions', fixed: 'right', width: 160, render: (_, row) => (
         <div className="row-actions">
-          <Tooltip title="清除该表的全量完成标记并重新执行">
+          <Tooltip title="清除该表的全量标记并自动触发该源重走：排空当前管线 → 全量重扫 → 续接增量">
             <Button type="text" size="small" disabled={actionPending}
               onClick={() => onRestock?.(row)}>重跑</Button>
           </Tooltip>

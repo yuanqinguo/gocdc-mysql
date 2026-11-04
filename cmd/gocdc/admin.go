@@ -99,7 +99,13 @@ func buildSourceDeps(rt *app, src *sourceState) *api.SourceDeps {
 		if svc == nil { // standby/未承担管线：409 语义（PRD 06 §1.5，原为 panic→500）
 			return errors.New("本节点当前不承担管线（热备/未当选）")
 		}
-		return svc.ResetTable(sctx, sdb, stable)
+		if err := svc.ResetTable(sctx, sdb, stable); err != nil {
+			return err
+		}
+		// 清标记后立即触发该源流程重走（runStock 重扫无 done 标记表 → 增量
+		// 从新快照位点续接）——不再要求运维单独重启进程；失位窗口由接管
+		// 节点兜底（标记已清，当选必重扫）
+		return rt.restockRestart(sctx, src)
 	}
 	sd.Pipeline = func() api.PipelineSnapshot { return src.pipelineSnapshot(rt.met) }
 	sd.PausePipeline = func(pctx context.Context) error { return rt.pauseSourcePipeline(pctx, src) }
