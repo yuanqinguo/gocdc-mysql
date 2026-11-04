@@ -6,219 +6,223 @@
 #       节点启动 = -cluster edu-mall-dev -etcd <etcd>:2379（纯 flag 形态）。
 # 注意：server_id 须与并存运行的 transfer（slave_id=1001）错开，防 dump 连接互踢；
 #       dev 环境源/目标口令为测试弱口令（123456），生产务必改 ${ENV} 占位。
+
 cluster: edu-mall-dev
+sources:
+  - id: "default"
+    source:
+      addr: "mysql-host.com:24971"
+      user: root
+      password: "123456"
+      charset: utf8mb4
+      flavor: mysql
+      server_id: 110061
+      timezone: Asia/Shanghai # 源 time_zone=+08:00
+      use_gtid: true # 源库已开 GTID；主从切换免人工修位点
+      heartbeat_interval_ms: 3000
+      read_timeout_ms: 60000
+      exclude_schemas: [mysql, sys, information_schema, performance_schema]
+    targets:
+      mysql:
+        enabled: true
+        addr: "mysql:3306" # compose 内目标 MySQL（112.61 本机）
+        user: root
+        password: "123456"
+        charset: utf8mb4
+        max_open_conns: 20 # 118 表快照需要较高并发连接
+        max_idle_conns: 5
+        conn_max_lifetime_min: 30
+        tx_chunk_rows: 500
+        target_database: dev_edu.mall.merge # 7 源库 118 表全部聚合写入此库
+        ddl_sync: true
+    # 规则表：组形态（组 = schema + sinks + ddl_policy；tables 白名单，未列入的表不同步）。
 
-source:
-  addr: "mysql-host.com:24971"
-  user: root
-  password: "123456"
-  charset: utf8mb4
-  flavor: mysql
-  server_id: 110061
-  timezone: Asia/Shanghai          # 源 time_zone=+08:00
-  use_gtid: true                   # 源库已开 GTID；主从切换免人工修位点
-  heartbeat_interval_ms: 3000
-  read_timeout_ms: 60000
-  exclude_schemas: [mysql, sys, information_schema, performance_schema]
+    # do_stock=true 表示该表数据由 gocdc 全量快照自行建立（118 表全 true）；
 
-node: { id: "", advertise_addr: "" }
+    # 特例排序列/主键照迁。
+    rules:
+      # ── dev_edu.mall.admin（45 表）──
+      - schema: dev_edu.mall.admin
+        sinks: {mysql: true}
+        ddl_policy: auto
+        tables:
+          - {table: admin_user, order_by_column: id, do_stock: true}
+          - {table: user_category_tags, order_by_column: id, do_stock: true}
+          - {table: book_feedback, order_by_column: id, do_stock: true}
+          - {table: books, order_by_column: id, do_stock: true}
+          - {table: chapter_detail, order_by_column: id, do_stock: true}
+          - {table: class, order_by_column: id, do_stock: true}
+          - {table: class_users, order_by_column: id, do_stock: true}
+          - {table: content_type, order_by_column: id, do_stock: true}
+          - {table: public_course_lessons, order_by_column: id, do_stock: true}
+          - {table: public_courses, order_by_column: id, do_stock: true}
+          - {table: exam_area, order_by_column: id, do_stock: true}
+          - {table: exam_calendar, order_by_column: id, do_stock: true}
+          - {table: exam_district, order_by_column: id, do_stock: true}
+          - {table: exam_orgs, order_by_column: id, do_stock: true}
+          - {table: exam_papers, order_by_column: id, do_stock: true}
+          - {table: knowledge_content, order_by_column: id, do_stock: true}
+          - {table: knowledge_detail, order_by_column: id, do_stock: true}
+          - {table: knowledges, order_by_column: id, do_stock: true}
+          - {table: paper_types, order_by_column: id, do_stock: true}
+          - {table: question_source, order_by_column: id, do_stock: true}
+          - {table: question_source_type, order_by_column: id, do_stock: true}
+          - {table: question_types, order_by_column: id, do_stock: true}
+          - {table: question_wrong_feedback, order_by_column: id, do_stock: true}
+          - {table: study_grades, order_by_column: id, do_stock: true}
+          - {table: study_stages, order_by_column: id, do_stock: true}
+          - {table: sub_question_types, order_by_column: id, do_stock: true}
+          - {table: subject_score, order_by_column: id, do_stock: true}
+          - {table: subjects, order_by_column: id, do_stock: true}
+          - {table: vintage_paper_types, order_by_column: id, do_stock: true}
+          - {table: question_miss_feedback, order_by_column: id, do_stock: true}
+          - {table: wechat_friends, order_by_column: friend_id, do_stock: true}
+          - {table: wechat_records, order_by_column: wechat_record_id, do_stock: true}
+          - {table: admin_wechat_records, order_by_column: id, do_stock: true}
+          - {table: friend_allocation, order_by_column: id, do_stock: true}
+          - {table: cluster_members, order_by_column: id, do_stock: true}
+          - {table: friend_tags, order_by_column: id, do_stock: true}
+          - {table: friend_messages, order_by_column: id, do_stock: true}
+          - {table: cluster_messages, order_by_column: id, do_stock: true}
+          - {table: contact_group, order_by_column: id, do_stock: true}
+          - {table: contact_group_clusters, order_by_column: id, do_stock: true}
+          - {table: contact_group_friends, order_by_column: id, do_stock: true}
+          - {table: push_config, order_by_column: id, do_stock: true}
+          - {table: push_task, order_by_column: id, do_stock: true}
+          - {table: bank_category_tree, order_by_column: id, do_stock: true}
+          - {table: bank_category_question, order_by_column: id, do_stock: true}
+      - schema: dev_edu.mall.content
+        # ── dev_edu.mall.content（18 表）──
+
+        sinks: {mysql: true}
+        ddl_policy: auto
+        tables:
+          - {table: admin_papers, order_by_column: paper_id, do_stock: true}
+          - {table: admin_questions, order_by_column: ques_id, do_stock: true}
+          - {table: content_audits, order_by_column: id, do_stock: true}
+          - {table: content_database, order_by_column: id, do_stock: true}
+          - {table: image_audits, order_by_column: id, do_stock: true}
+          - {table: image_database, order_by_column: id, do_stock: true}
+          - {table: public_lessons, order_by_column: id, do_stock: true}
+          - {table: method_database, order_by_column: id, do_stock: true}
+          - {table: paper_audits, order_by_column: id, do_stock: true}
+          - {table: public_content_database, order_by_column: id, do_stock: true}
+          - {table: public_papers, order_by_column: paper_id, do_stock: true}
+          - {table: public_questions, order_by_column: ques_id, do_stock: true}
+          - {table: question_audits, order_by_column: id, do_stock: true}
+          - {table: question_feedback, order_by_column: id, do_stock: true}
+          - {table: public_lesson_tags, order_by_column: id, do_stock: true}
+          - {table: public_ques_tags, order_by_column: id, do_stock: true}
+          - {table: lesson_sub_type, order_by_column: id, do_stock: true}
+          - {table: public_paper_group_questions, order_by_column: id, do_stock: true}
+      - schema: dev_edu.mall.account
+        # ── dev_edu.mall.account（8 表）──
+
+        sinks: {mysql: true}
+        ddl_policy: auto
+        tables:
+          - {table: app_user, order_by_column: id, do_stock: true}
+          - {table: mobile_user, order_by_column: id, do_stock: true}
+          - {table: user, order_by_column: id, do_stock: true}
+          - {table: wechat_user, order_by_column: id, do_stock: true}
+          - {table: user_vip_benefit, order_by_column: id, do_stock: true}
+          - {table: student_profile, order_by_column: id, do_stock: true}
+          - {table: tenant, order_by_column: id, do_stock: true}
+          - {table: tenant_user, order_by_column: id, do_stock: true}
+      - schema: dev_edu.mall.order
+        # ── dev_edu.mall.order（10 表）──
+
+        sinks: {mysql: true}
+        ddl_policy: auto
+        tables:
+          - {table: course_goods, order_by_column: id, do_stock: true}
+          - {table: course_goods_item, order_by_column: id, do_stock: true}
+          - {table: orders, order_by_column: id, do_stock: true}
+          - {table: order_items, order_by_column: id, do_stock: true}
+          - {table: order_gaps, order_by_column: id, do_stock: true}
+          - {table: order_refunds, order_by_column: id, do_stock: true}
+          - {table: order_settles, order_by_column: id, do_stock: true}
+          - {table: real_goods, order_by_column: id, do_stock: true}
+          - {table: subject_goods, order_by_column: id, do_stock: true}
+          - {table: subject_gift_goods, order_by_column: id, do_stock: true}
+      - schema: dev_edu.mall.channel
+        # ── dev_edu.mall.channel（7 表）──
+
+        sinks: {mysql: true}
+        ddl_policy: auto
+        tables:
+          - {table: card_record, order_by_column: id, do_stock: true}
+          - {table: channel_qrcode, order_by_column: id, do_stock: true}
+          - {table: channel_stores, order_by_column: id, do_stock: true}
+          - {table: channel_users, order_by_column: id, do_stock: true}
+          - {table: channels, order_by_column: id, do_stock: true}
+          - {table: goods, order_by_column: id, do_stock: true}
+          - {table: settle_record, order_by_column: id, do_stock: true}
+      - schema: dev_edu.mall.customer
+        # ── dev_edu.mall.customer（22 表）──
+
+        sinks: {mysql: true}
+        ddl_policy: auto
+        tables:
+          - {table: collect_course, order_by_column: id, do_stock: true}
+          - {table: collect_knowledge, order_by_column: id, do_stock: true}
+          - {table: collect_paper, order_by_column: id, do_stock: true}
+          - {table: collect_question, order_by_column: id, do_stock: true}
+          - {table: lesson_answer_record, order_by_column: id, do_stock: true}
+          - {table: lesson_feedback, order_by_column: id, do_stock: true}
+          - {table: lesson_learn_record, order_by_column: id, do_stock: true}
+          - {table: like_question, order_by_column: id, do_stock: true}
+          - {table: photo_qa, order_by_column: id, do_stock: true}
+          - {table: qa_session, order_by_column: id, do_stock: true}
+          - {table: qa_session_msg, order_by_column: id, do_stock: true}
+          - {table: qa_session_normal, order_by_column: id, do_stock: true}
+          - {table: qa_session_normal_msg, order_by_column: id, do_stock: true}
+          - {table: user_goods, order_by_column: id, do_stock: true}
+          - {table: user_tags, order_by_column: id, do_stock: true}
+          - {table: paper_analysis, order_by_column: id, do_stock: true}
+          - {table: study_plan, order_by_column: id, do_stock: true}
+          - {table: review_summary, order_by_column: id, do_stock: true}
+          - {table: user_download_records, order_by_column: id, do_stock: true}
+          - {table: trial_goods, order_by_column: id, do_stock: true}
+          - {table: lesson_learn_progress, order_by_column: id, do_stock: true}
+          - {table: practice_records, order_by_column: id, do_stock: true}
+      - schema: dev_edu.mall.live
+        # ── dev_edu.mall.live（8 表）──
+
+        sinks: {mysql: true}
+        ddl_policy: auto
+        tables:
+          - {table: live, order_by_column: id, do_stock: true}
+          - {table: learn_record, order_by_column: id, do_stock: true}
+          - {table: learn_progress, order_by_column: id, do_stock: true}
+          - {table: interactions, order_by_column: id, do_stock: true}
+          - {table: interaction_answer, order_by_column: id, do_stock: true}
+          - {table: comments, order_by_column: id, do_stock: true}
+          - {table: live_goods_click, order_by_column: id, do_stock: true}
+          - {table: live_users, order_by_column: id, do_stock: true}
+node: {id: "", advertise_addr: ""}
 ha:
-  enabled: false                    # 单节点：跳过选举，直接以 leader 启动（位点仍走 etcd）
+  enabled: false # 单节点：跳过选举，直接以 leader 启动（位点仍走 etcd）
   lease_ttl_seconds: 10
   leader_check_interval_ms: 2000
   resign_on_shutdown: true
-
 pipeline:
-  workers: 4                        # 118 表并行快照/回放取 4
+  workers: 4 # 118 表并行快照/回放取 4
   worker_queue_size: 8192
   batch_size: 200
   flush_interval_ms: 200
   position_save_interval_ms: 3000
-
 # 全量快照：源库 root 已有 RELOAD（实测 SHOW GRANTS）→ auto 走 FTWRL
 # （毫秒级持有，快照与位点 P 严格对齐），无需降级 none。
 stock:
   lock_mode: auto
   workers: 4
   chunk_rows: 5000
-
-targets:
-  mysql:
-    enabled: true
-    addr: "mysql:3306"              # compose 内目标 MySQL（112.61 本机）
-    user: root
-    password: "123456"
-    charset: utf8mb4
-    max_open_conns: 20              # 118 表快照需要较高并发连接
-    max_idle_conns: 5
-    conn_max_lifetime_min: 30
-    tx_chunk_rows: 500
-    target_database: dev_edu.mall.merge   # 7 源库 118 表全部聚合写入此库
-    ddl_sync: true
-
-# 规则表：组形态（组 = schema + sinks + ddl_policy；tables 白名单，未列入的表不同步）。
-# do_stock=true 表示该表数据由 gocdc 全量快照自行建立（118 表全 true）；
-# 特例排序列/主键照迁。
-rules:
-  # ── dev_edu.mall.admin（45 表）──
-  - schema: dev_edu.mall.admin
-    sinks: { mysql: true }
-    ddl_policy: auto
-    tables:
-      - { table: admin_user, order_by_column: id, do_stock: true }
-      - { table: user_category_tags, order_by_column: id, do_stock: true }
-      - { table: book_feedback, order_by_column: id, do_stock: true }
-      - { table: books, order_by_column: id, do_stock: true }
-      - { table: chapter_detail, order_by_column: id, do_stock: true }
-      - { table: class, order_by_column: id, do_stock: true }
-      - { table: class_users, order_by_column: id, do_stock: true }
-      - { table: content_type, order_by_column: id, do_stock: true }
-      - { table: public_course_lessons, order_by_column: id, do_stock: true }
-      - { table: public_courses, order_by_column: id, do_stock: true }
-      - { table: exam_area, order_by_column: id, do_stock: true }
-      - { table: exam_calendar, order_by_column: id, do_stock: true }
-      - { table: exam_district, order_by_column: id, do_stock: true }
-      - { table: exam_orgs, order_by_column: id, do_stock: true }
-      - { table: exam_papers, order_by_column: id, do_stock: true }
-      - { table: knowledge_content, order_by_column: id, do_stock: true }
-      - { table: knowledge_detail, order_by_column: id, do_stock: true }
-      - { table: knowledges, order_by_column: id, do_stock: true }
-      - { table: paper_types, order_by_column: id, do_stock: true }
-      - { table: question_source, order_by_column: id, do_stock: true }
-      - { table: question_source_type, order_by_column: id, do_stock: true }
-      - { table: question_types, order_by_column: id, do_stock: true }
-      - { table: question_wrong_feedback, order_by_column: id, do_stock: true }
-      - { table: study_grades, order_by_column: id, do_stock: true }
-      - { table: study_stages, order_by_column: id, do_stock: true }
-      - { table: sub_question_types, order_by_column: id, do_stock: true }
-      - { table: subject_score, order_by_column: id, do_stock: true }
-      - { table: subjects, order_by_column: id, do_stock: true }
-      - { table: vintage_paper_types, order_by_column: id, do_stock: true }
-      - { table: question_miss_feedback, order_by_column: id, do_stock: true }
-      - { table: wechat_friends, order_by_column: friend_id, do_stock: true }
-      - { table: wechat_records, order_by_column: wechat_record_id, do_stock: true }
-      - { table: admin_wechat_records, order_by_column: id, do_stock: true }
-      - { table: friend_allocation, order_by_column: id, do_stock: true }
-      - { table: cluster_members, order_by_column: id, do_stock: true }
-      - { table: friend_tags, order_by_column: id, do_stock: true }
-      - { table: friend_messages, order_by_column: id, do_stock: true }
-      - { table: cluster_messages, order_by_column: id, do_stock: true }
-      - { table: contact_group, order_by_column: id, do_stock: true }
-      - { table: contact_group_clusters, order_by_column: id, do_stock: true }
-      - { table: contact_group_friends, order_by_column: id, do_stock: true }
-      - { table: push_config, order_by_column: id, do_stock: true }
-      - { table: push_task, order_by_column: id, do_stock: true }
-      - { table: bank_category_tree, order_by_column: id, do_stock: true }
-      - { table: bank_category_question, order_by_column: id, do_stock: true }
-  # ── dev_edu.mall.content（18 表）──
-  - schema: dev_edu.mall.content
-    sinks: { mysql: true }
-    ddl_policy: auto
-    tables:
-      - { table: admin_papers, order_by_column: paper_id, do_stock: true }
-      - { table: admin_questions, order_by_column: ques_id, do_stock: true }
-      - { table: content_audits, order_by_column: id, do_stock: true }
-      - { table: content_database, order_by_column: id, do_stock: true }
-      - { table: image_audits, order_by_column: id, do_stock: true }
-      - { table: image_database, order_by_column: id, do_stock: true }
-      - { table: public_lessons, order_by_column: id, do_stock: true }
-      - { table: method_database, order_by_column: id, do_stock: true }
-      - { table: paper_audits, order_by_column: id, do_stock: true }
-      - { table: public_content_database, order_by_column: id, do_stock: true }
-      - { table: public_papers, order_by_column: paper_id, do_stock: true }
-      - { table: public_questions, order_by_column: ques_id, do_stock: true }
-      - { table: question_audits, order_by_column: id, do_stock: true }
-      - { table: question_feedback, order_by_column: id, do_stock: true }
-      - { table: public_lesson_tags, order_by_column: id, do_stock: true }
-      - { table: public_ques_tags, order_by_column: id, do_stock: true }
-      - { table: lesson_sub_type, order_by_column: id, do_stock: true }
-      - { table: public_paper_group_questions, order_by_column: id, do_stock: true }
-  # ── dev_edu.mall.account（8 表）──
-  - schema: dev_edu.mall.account
-    sinks: { mysql: true }
-    ddl_policy: auto
-    tables:
-      - { table: app_user, order_by_column: id, do_stock: true }
-      - { table: mobile_user, order_by_column: id, do_stock: true }
-      - { table: user, order_by_column: id, do_stock: true }
-      - { table: wechat_user, order_by_column: id, do_stock: true }
-      - { table: user_vip_benefit, order_by_column: id, do_stock: true }
-      - { table: student_profile, order_by_column: id, do_stock: true }
-      - { table: tenant, order_by_column: id, do_stock: true }
-      - { table: tenant_user, order_by_column: id, do_stock: true }
-  # ── dev_edu.mall.order（10 表）──
-  - schema: dev_edu.mall.order
-    sinks: { mysql: true }
-    ddl_policy: auto
-    tables:
-      - { table: course_goods, order_by_column: id, do_stock: true }
-      - { table: course_goods_item, order_by_column: id, do_stock: true }
-      - { table: orders, order_by_column: id, do_stock: true }
-      - { table: order_items, order_by_column: id, do_stock: true }
-      - { table: order_gaps, order_by_column: id, do_stock: true }
-      - { table: order_refunds, order_by_column: id, do_stock: true }
-      - { table: order_settles, order_by_column: id, do_stock: true }
-      - { table: real_goods, order_by_column: id, do_stock: true }
-      - { table: subject_goods, order_by_column: id, do_stock: true }
-      - { table: subject_gift_goods, order_by_column: id, do_stock: true }
-  # ── dev_edu.mall.channel（7 表）──
-  - schema: dev_edu.mall.channel
-    sinks: { mysql: true }
-    ddl_policy: auto
-    tables:
-      - { table: card_record, order_by_column: id, do_stock: true }
-      - { table: channel_qrcode, order_by_column: id, do_stock: true }
-      - { table: channel_stores, order_by_column: id, do_stock: true }
-      - { table: channel_users, order_by_column: id, do_stock: true }
-      - { table: channels, order_by_column: id, do_stock: true }
-      - { table: goods, order_by_column: id, do_stock: true }
-      - { table: settle_record, order_by_column: id, do_stock: true }
-  # ── dev_edu.mall.customer（22 表）──
-  - schema: dev_edu.mall.customer
-    sinks: { mysql: true }
-    ddl_policy: auto
-    tables:
-      - { table: collect_course, order_by_column: id, do_stock: true }
-      - { table: collect_knowledge, order_by_column: id, do_stock: true }
-      - { table: collect_paper, order_by_column: id, do_stock: true }
-      - { table: collect_question, order_by_column: id, do_stock: true }
-      - { table: lesson_answer_record, order_by_column: id, do_stock: true }
-      - { table: lesson_feedback, order_by_column: id, do_stock: true }
-      - { table: lesson_learn_record, order_by_column: id, do_stock: true }
-      - { table: like_question, order_by_column: id, do_stock: true }
-      - { table: photo_qa, order_by_column: id, do_stock: true }
-      - { table: qa_session, order_by_column: id, do_stock: true }
-      - { table: qa_session_msg, order_by_column: id, do_stock: true }
-      - { table: qa_session_normal, order_by_column: id, do_stock: true }
-      - { table: qa_session_normal_msg, order_by_column: id, do_stock: true }
-      - { table: user_goods, order_by_column: id, do_stock: true }
-      - { table: user_tags, order_by_column: id, do_stock: true }
-      - { table: paper_analysis, order_by_column: id, do_stock: true }
-      - { table: study_plan, order_by_column: id, do_stock: true }
-      - { table: review_summary, order_by_column: id, do_stock: true }
-      - { table: user_download_records, order_by_column: id, do_stock: true }
-      - { table: trial_goods, order_by_column: id, do_stock: true }
-      - { table: lesson_learn_progress, order_by_column: id, do_stock: true }
-      - { table: practice_records, order_by_column: id, do_stock: true }
-  # ── dev_edu.mall.live（8 表）──
-  - schema: dev_edu.mall.live
-    sinks: { mysql: true }
-    ddl_policy: auto
-    tables:
-      - { table: live, order_by_column: id, do_stock: true }
-      - { table: learn_record, order_by_column: id, do_stock: true }
-      - { table: learn_progress, order_by_column: id, do_stock: true }
-      - { table: interactions, order_by_column: id, do_stock: true }
-      - { table: interaction_answer, order_by_column: id, do_stock: true }
-      - { table: comments, order_by_column: id, do_stock: true }
-      - { table: live_goods_click, order_by_column: id, do_stock: true }
-      - { table: live_users, order_by_column: id, do_stock: true }
-
 observability:
   metrics_addr: ":9595"
   web:
-    enabled: true                    # Web admin（:8060）
+    enabled: true # Web admin（:8060）
     addr: ":8060"
     username: ${GOCDC_WEB_USER}
     password: ${GOCDC_WEB_PASSWORD}
-  log: { level: info, json: false }
+  log: {level: info, json: false}

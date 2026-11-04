@@ -29,7 +29,7 @@
 
 ```
 run()
- ├─ 解析启动与配置加载（config.Load 内部完成 v1→v2 规范化，PRD 03 §4）
+ ├─ 解析启动与配置加载（config.Load；顶层 v1 形态报错拒绝，统一 sources[]，PRD 03 §4）
  ├─ 日志 / metrics server                       [共享，不变]
  ├─ 协调面 etcd + session + 注册 + server_id 逐源派生（§6）
  ├─ ★ 键迁移 v1→v2（幂等，PRD 04 §4）

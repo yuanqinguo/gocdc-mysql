@@ -41,10 +41,10 @@ type Bootstrap struct {
 // ConfigCenterOptions 配置中心连接信息。
 type ConfigCenterOptions struct {
 	EtcdAddrs []string `json:"etcd_addrs"` // 配置中心 etcd endpoints
-	Key       string   `json:"key"`        // 配置 key；空 = /gocdc/{cluster}/config
+	Key       string   `json:"key"`        // 配置 key；空 = DefaultConfigCenterKey（/config/edu.mall.gocdc/system）
 }
 
-// StartupFlags 命令行 flag（全部可选，仅作引导文件之上的覆盖）。
+// StartupFlags 命令行 flag（全部可选，仅作引导文件/env 之上的覆盖）。
 type StartupFlags struct {
 	Cluster    string // -cluster
 	Etcd       string // -etcd，逗号分隔
@@ -54,20 +54,23 @@ type StartupFlags struct {
 
 // Startup 裁决后的生效启动参数（ResolveStartup 产物）。
 type Startup struct {
-	Cluster           string   // 集群名（flag 覆盖 > 引导文件）
+	Cluster           string   // 集群名（flag > 引导文件 > gocdc-mysql；决定协调面前缀 /gocdc/{cluster}）
 	ConfigSource      string   // "file" | "etcd"
 	ConfigFile        string   // file 形态：全量配置文件路径（=引导文件本身）
 	BootstrapFile     string   // 实际使用的引导文件路径（"" = 无文件、纯 flag 模式）
 	ConfigCenterAddrs []string // 配置中心 etcd（etcd 形态才有）
-	ConfigKey         string   // 配置 key（绝对路径，DefaultConfigKey 或覆盖值）
+	ConfigKey         string   // 配置 key（绝对路径，DefaultConfigCenterKey 或覆盖值）
 	CoordinationAddrs []string // 协调面 etcd endpoints
 }
 
-// ResolveStartup 启动裁决：合并 flag 与引导文件，产出生效启动参数。
-// 优先级 flag > 引导文件 > 报错。纯 flag 模式（无引导文件）：
-// -cluster + -etcd 必填，同一 etcd 兼任配置中心与协调面。
+// ResolveStartup 启动裁决：合并 flag、环境变量与引导文件，产出生效启动参数。
+// 优先级：flag > 环境变量（仅 etcd：ETCD_HOSTS）> 引导文件 > 终极默认 > 报错。
+// 集群名终极默认 gocdc-mysql；配置键终极默认 DefaultConfigCenterKey（公司约定
+// 固定键，多集群共享配置中心时各集群须显式给 key）。纯 flag 模式（无引导文件）：
+// -etcd（或 ETCD_HOSTS）必填，同一 etcd 兼任配置中心与协调面。
 func ResolveStartup(fl StartupFlags, defaultFile string) (Startup, error) {
 	st := Startup{}
+	etcdFlag := orDefaultStr(fl.Etcd, os.Getenv("ETCD_HOSTS")) // env 层：仅 etcd 有
 
 	// ① 定位引导文件：-config-file 显式指定 > 工作目录默认文件（存在才用）
 	path := fl.ConfigFile
@@ -79,20 +82,20 @@ func ResolveStartup(fl StartupFlags, defaultFile string) (Startup, error) {
 	}
 
 	if path == "" {
-		// ② 纯 flag 模式（-cluster/-etcd 必填，单 etcd 双角色）
-		if fl.Cluster == "" || fl.Etcd == "" {
+		// ② 纯 flag/env 模式（-etcd 或 ETCD_HOSTS 必填；单 etcd 双角色）
+		if etcdFlag == "" {
 			return st, fmt.Errorf(
-				"未找到引导文件 %s 且 -cluster/-etcd 未给全。启动方式三选一：\n"+
+				"未找到引导文件 %s 且 -etcd（或环境变量 ETCD_HOSTS）未给。启动方式三选一：\n"+
 					"  ① 调试（推荐）：工作目录放 %s，零参数启动（见 internal/config/README.md §2.3）\n"+
 					"  ② 生产：引导桩文件（config_source: etcd），配置从配置中心拉取\n"+
-					"  ③ 显式 flag：-cluster <name> -etcd <addrs> [-config-file <yml>]",
-				defaultFile, defaultFile)
+					"  ③ 公司约定：ETCD_HOSTS=<addrs> gocdc（cluster=gocdc-mysql，配置读 %s）",
+				defaultFile, defaultFile, DefaultConfigCenterKey)
 		}
-		addrs := strings.Split(fl.Etcd, ",")
-		st.Cluster = fl.Cluster
+		addrs := strings.Split(etcdFlag, ",")
+		st.Cluster = orDefaultStr(fl.Cluster, DefaultClusterName)
 		st.ConfigSource = "etcd"
 		st.ConfigCenterAddrs = addrs // 同一 etcd 兼任配置中心
-		st.ConfigKey = orDefaultKey(fl.ConfigKey, st.Cluster)
+		st.ConfigKey = orDefaultKey(fl.ConfigKey)
 		st.CoordinationAddrs = addrs
 		return st, nil
 	}
@@ -103,10 +106,7 @@ func ResolveStartup(fl StartupFlags, defaultFile string) (Startup, error) {
 		return st, err
 	}
 	st.BootstrapFile = path
-	st.Cluster = orDefaultStr(fl.Cluster, fileCluster)
-	if st.Cluster == "" {
-		return st, fmt.Errorf("%s: cluster 为空（顶层 cluster 字段或 -cluster flag 至少给一个）", path)
-	}
+	st.Cluster = orDefaultStr(fl.Cluster, orDefaultStr(fileCluster, DefaultClusterName))
 
 	source := bs.ConfigSource
 	if source == "" {
@@ -122,10 +122,10 @@ func ResolveStartup(fl StartupFlags, defaultFile string) (Startup, error) {
 	case "file":
 		// file 形态：引导文件本身即全量配置
 		st.ConfigFile = path
-		st.ConfigKey = orDefaultKey(fl.ConfigKey, st.Cluster) // file 源不读配置中心，key 仅展示用
-		st.CoordinationAddrs = coordinationAddrs(fl.Etcd, bs)
+		st.ConfigKey = orDefaultKey(fl.ConfigKey) // file 源不读配置中心，key 仅展示用
+		st.CoordinationAddrs = coordinationAddrs(etcdFlag, bs)
 		if len(st.CoordinationAddrs) == 0 {
-			return st, fmt.Errorf("%s: 协调面 etcd 未配置（bootstrap.etcd_addrs 或 -etcd 至少一个；"+
+			return st, fmt.Errorf("%s: 协调面 etcd 未配置（bootstrap.etcd_addrs、-etcd 或 ETCD_HOSTS 至少一个；"+
 				"位点/选举仍依赖 etcd，-config-file 只替代配置来源）", path)
 		}
 	case "etcd":
@@ -134,8 +134,8 @@ func ResolveStartup(fl StartupFlags, defaultFile string) (Startup, error) {
 			return st, fmt.Errorf("%s: config_source=etcd 但 bootstrap.config_center.etcd_addrs 为空", path)
 		}
 		st.ConfigCenterAddrs = bs.ConfigCenter.EtcdAddrs
-		st.ConfigKey = orDefaultKey(orDefaultStr(fl.ConfigKey, bs.ConfigCenter.Key), st.Cluster)
-		st.CoordinationAddrs = coordinationAddrs(fl.Etcd, bs) // 空 = 回退配置中心同实例
+		st.ConfigKey = orDefaultKey(orDefaultStr(fl.ConfigKey, bs.ConfigCenter.Key))
+		st.CoordinationAddrs = coordinationAddrs(etcdFlag, bs) // 空 = 回退配置中心同实例
 		if len(st.CoordinationAddrs) == 0 {
 			st.CoordinationAddrs = st.ConfigCenterAddrs
 		}
@@ -175,7 +175,8 @@ func loadBootstrap(path string) (Bootstrap, string, error) {
 	return doc.Bootstrap, doc.Cluster, nil
 }
 
-// coordinationAddrs 协调面地址裁决：flag -etcd > bootstrap.etcd_addrs > 空（回退由调用方定）。
+// coordinationAddrs 协调面地址裁决：flag -etcd > 环境变量 ETCD_HOSTS >
+// bootstrap.etcd_addrs > 空（回退由调用方定）。
 func coordinationAddrs(flagEtcd string, bs Bootstrap) []string {
 	if flagEtcd != "" {
 		return strings.Split(flagEtcd, ",")
@@ -190,9 +191,11 @@ func orDefaultStr(v, def string) string {
 	return def
 }
 
-func orDefaultKey(v, cluster string) string {
+// orDefaultKey 配置键裁决：flag/引导桩 key > 终极默认（公司约定固定键，
+// DefaultConfigCenterKey——集群名不再参与配置键派生）。
+func orDefaultKey(v string) string {
 	if v != "" {
 		return v
 	}
-	return DefaultConfigKey(cluster)
+	return DefaultConfigCenterKey
 }

@@ -46,7 +46,7 @@ docker compose exec mysql-dst mysql -uroot -p123456 -e "SELECT * FROM demo.order
 - 演示用 `-config-file`（03 §3.1 开发模式）；位点/选举仍走 etcd——所以多节点选主是真 HA。
 - 零参数启动：工作目录放 `config.local.yml` 即可（引导文件 file/etcd 两形态、
   配置中心与协调面可分实例，见 internal/config/README.md §2.3）；compose 演示用显式 flag 形态。
-- 生产形态：配置写入 etcd `{prefix}/config` 后只给 `-cluster/-etcd` 启动（Web 端 M6 提供）。
+- 生产形态：配置写入 etcd 配置键（默认 `/config/edu.mall.gocdc/system`；多集群共享 etcd 时以引导桩 `config_center.key` 或 `-config-key` 显式区分）后只给 `-etcd`（或 `ETCD_HOSTS`）启动。
 - 示例配置里的密码仅用于演示，生产用 `${ENV}` 占位注入（03 §3.2）。
 - gocdc 启动期会比对源/目标全部唯一索引；列序相同但索引名称不同是允许的，缺失或额外唯一键会 fail-fast（防止幂等 upsert 按错误唯一键折叠数据）。
 - 镜像由 CI（tag_push）构建推送；本地 compose 默认现场 build（`build:` 段）。

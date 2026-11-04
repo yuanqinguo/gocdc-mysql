@@ -57,6 +57,7 @@ bootstrap:
   config_source: etcd
   config_center:
     etcd_addrs: [127.0.0.1:12380]
+    key: /gocdc/verify/config
   etcd_addrs:
     - 127.0.0.1:12379
 EOF

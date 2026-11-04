@@ -16,6 +16,7 @@ bootstrap:
   config_source: etcd
   config_center:
     etcd_addrs: [127.0.0.1:12380]
+    key: /gocdc/$cluster/config
   etcd_addrs:
     - 127.0.0.1:12379
 EOF
@@ -49,19 +50,10 @@ cc_run a3 verify /tmp/v2/body-a3.yml
 grep -q "NO_SUCH_ENV_XYZ" /tmp/v2/a3/out.log && [ "$(cat /tmp/v2/a3/exit.log)" = "1" ] \
   && ok "A3 精确报 NO_SUCH_ENV_XYZ 未设置 exit=1" || bad "A3"
 
-grp "A2 坏配置完整清单不短路（配置中心正文 16+ 处错误）"
+grp "A2 坏配置完整清单不短路（配置中心正文 16+ 处错误，v2 sources[] 形态）"
 cat > /tmp/v2/body-a2.yml <<'EOF'
 config_version: 3
 cluster: othercl
-source:
-  addr: ""
-  user: ""
-  password: "123456"
-  charset: ""
-  flavor: oracle
-  server_id: 0
-  timezone: ""
-  exclude_schemas: [mysql, sys, information_schema]
 ha:
   lease_ttl_seconds: 1
   leader_check_interval_ms: 0
@@ -74,33 +66,44 @@ pipeline:
   position_save_interval_ms: 3000
   on_convert_error: bogus
   decimal_as: int
-targets:
-  mysql:
-    enabled: true
-    addr: 127.0.0.1:13307
-    user: root
-    password: "123456"
-    charset: utf8mb4
-    ddl_sync: true
-  rocketmq:
-    enabled: true
-    name_servers: [127.0.0.1:8081]
-    group: gocdc-verify
-    topic_prefix: "CDC."
-    order_by: row
-rules:
-  - schema: shop
-    sinks: {mysql: true}
-    tables: []
-  - schema: shop
-    sinks: {mysql: true}
-    tables:
-      - {table: orders, do_stock: true}
-      - {table: orders, do_stock: true, order_by_column: id}
-  - schema: bad schema
-    sinks: {mysql: true}
-    tables:
-      - {table: t1, do_stock: false, mask_columns: {"bad col": phone}}
+sources:
+  - id: bad
+    source:
+      addr: ""
+      user: ""
+      password: "123456"
+      charset: ""
+      flavor: oracle
+      server_id: 0
+      timezone: ""
+      exclude_schemas: [mysql, sys, information_schema]
+    targets:
+      mysql:
+        enabled: true
+        addr: 127.0.0.1:13307
+        user: root
+        password: "123456"
+        charset: utf8mb4
+        ddl_sync: true
+      rocketmq:
+        enabled: true
+        name_servers: [127.0.0.1:8081]
+        group: gocdc-verify
+        topic_prefix: "CDC."
+        order_by: row
+    rules:
+      - schema: shop
+        sinks: {mysql: true}
+        tables: []
+      - schema: shop
+        sinks: {mysql: true}
+        tables:
+          - {table: orders, do_stock: true}
+          - {table: orders, do_stock: true, order_by_column: id}
+      - schema: bad schema
+        sinks: {mysql: true}
+        tables:
+          - {table: t1, do_stock: false, mask_columns: {"bad col": phone}}
 observability:
   metrics_addr: ":9595"
   web:

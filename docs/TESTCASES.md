@@ -176,8 +176,8 @@ L3 脚本 `.verify/v2/35_ms_core.sh`（数据面）+ `46_ms_ha.sh`（故障面�
 | MS-08 | 逐源 restock | 只重扫该源该表，其他源与其他表不动（E9） | L2 | 35 组 | ✅-L3 |
 | MS-09 | MQ 双源：topic 不相交（V4 拦死）+ envelope source 字段 + 各自保序 | 前缀不同不冲突；消息带 source=src-a；(topic,event_id) 去重成立（E10） | L2 | 35 组 | ✅-L3 |
 | MS-10 | 背压隔离（分目标库：停 dst → 仅 src-a 反压/failed，src-b 不受影响） | 无背压传导；dst 恢复后 src-a 自愈（E11） | L3 | 46 组 | ✅-L3 |
-| MS-11 | 配置校验 V1~V6：源数上限/id 规则/v1-v2 双写/跨源目标冲突/server_id 冲突/继承合并 | 全分支拒启或通过；v1 自动包装 default | L1+L3 | config 表驱动（multi_source_test.go）+ 35 组脚本分支 | ✅ |
-| MS-12 | v1 配置零修改升级 + etcd 键迁移幂等 + 位点连续 | 自动包装 default；旧键 CAS 搬到 sources/default/；完成标记；二次启动不重搬；增量续传（E12） | L2 | 46 组 | ✅-L3 |
+| MS-11 | 配置校验 V1~V6：源数上限/id 规则/v1 顶层形态拒绝/跨源目标冲突/server_id 冲突/继承合并 | 全分支拒启或通过；v1 顶层形态报错并指引改写 sources[]（2026-11 移除自动包装） | L1+L3 | config 表驱动（multi_source_test.go）+ 35 组脚本分支 | ✅ |
+| MS-12 | v1 正文一步改写升级（sources[id=default]）+ etcd 键迁移幂等 + 位点连续 | 旧键 CAS 搬到 sources/default/；完成标记；二次启动不重搬；增量续传（E12） | L2 | 46 组 | ✅-L3 |
 | MS-13 | 旧 leader 位点写拒绝（协调面失联 → gate 消失 → 熔断） | 双源管线停（安全态）；恢复重启后零丢失续传（E13） | L3 | 46 组 | ✅-L3 |
 | MS-14 | 源级路由：旧顶层路由已移除（一律 404）/ /sources 清单 / 审计 source 字段 / 未知 sid 404 / restock 409（standby） | 旧路径 404（PRD 06 §1.4）；源级操作走 /sources/{sid}/... | L1+L3 | api multi_source_test.go + 35 组 | ✅ |
 | MS-15 | server_id 按 node_id:sid 派生互异；schema 缓存/transformer 按源实例隔离 | 双 dump 连接并存不互踢；双源持续同步 | L1+L3 | identity 单测 + 35 组 | ✅ |

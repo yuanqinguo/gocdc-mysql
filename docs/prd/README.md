@@ -23,7 +23,7 @@ N 份运维面。
 | D1 | 引入「源」一等实体，配置升级为 `sources[]` 数组 | 单源假设的根在 `Config.Source` 单数结构，从根上改 |
 | D2 | 保持 cluster 级单 leader，leader 同时承担全部源 | 租约写门槛/防脑裂机制零改动，一个 `{prefix}/leader` 锚点保护全部源 |
 | D3 | etcd 键空间下沉一层：`/gocdc/{cluster}/sources/{sid}/...` | 位点/标记/DDL 门/暂停标志全部按源分片；cluster 级键（leader/nodes/config/audit）不动 |
-| D4 | 存量键一次性自动迁移（CAS 幂等），v1 配置自动包装为 `default` 源 | 老部署升级零操作；迁移可审计、可回滚 |
+| D4 | 存量键一次性自动迁移（CAS 幂等）；v1 顶层正文一步改写为 `sources:[{id:"default"}]`（2026-11 起不再自动包装） | 键迁移可审计、可回滚；正文改写一次性、升级路径见 RUNBOOK §9.4 |
 | D5 | 失败隔离到源级：某个源的源库故障只停该源并周期重试 | 「一坏全停」与部署 N 个集群的效果不等价，必须改 |
 | D6 | 跨源目标命名空间强制不相交（MQ topic、MySQL 目标表），冲突即配置错误 | 两个源写同一个 topic/表 = 数据互覆/乱序，校验期拦死 |
 | D7 | 消息 envelope 增加 `source` 字段（schema_version 升 2）；event_id 保持源内唯一 | topic 不相交 ⇒ 消费端按 (topic, event_id) 去重依然成立，老消费者忽略新字段即兼容 |

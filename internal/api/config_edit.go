@@ -120,7 +120,7 @@ func (h apiHandlers) sourceGetRules(c *gin.Context) {
 		}
 		res := config.LoadFromRaw(raw, h.Cluster)
 		if len(res.Errors) > 0 || res.Config == nil {
-			respondErr(c, 500, "配置中心正文无法解析（先修复正文）")
+			respondErr(c, 500, "配置中心正文无法解析（先修复正文）: "+errsText(res.Errors))
 			return
 		}
 		rules, ok := rulesOfSource(res.Config, sd.ID)
@@ -172,7 +172,7 @@ func (h apiHandlers) putRulesOf(sd *SourceDeps, c *gin.Context) {
 	}
 	oldRes := config.LoadFromRaw(raw, h.Cluster)
 	if len(oldRes.Errors) > 0 || oldRes.Config == nil {
-		respondErr(c, 500, "现有配置正文无法通过加载链（先修复配置中心正文再编辑）")
+		respondErr(c, 500, "现有配置正文无法通过加载链（先修复配置中心正文再编辑）: "+errsText(oldRes.Errors))
 		return
 	}
 	oldRules, ok := rulesOfSource(oldRes.Config, sd.ID)
@@ -188,11 +188,7 @@ func (h apiHandlers) putRulesOf(sd *SourceDeps, c *gin.Context) {
 	}
 	newRes := config.LoadFromRaw(newRaw, h.Cluster)
 	if len(newRes.Errors) > 0 {
-		msgs := make([]string, 0, len(newRes.Errors))
-		for _, e := range newRes.Errors {
-			msgs = append(msgs, e.Error())
-		}
-		respondErrData(c, 400, "配置校验未通过（未保存）: "+strings.Join(msgs, "；"), nil)
+		respondErrData(c, 400, "配置校验未通过（未保存）: "+errsText(newRes.Errors), nil)
 		return
 	}
 
@@ -251,6 +247,18 @@ func (h apiHandlers) applyRestart(c *gin.Context) {
 			zap.String("node", h.NodeID))
 		h.Shutdown()
 	}()
+}
+
+// errsText 错误清单拼接（Web 响应文案用；空清单兜底通用文案）。
+func errsText(errs []error) string {
+	if len(errs) == 0 {
+		return "原因未知（见服务端日志）"
+	}
+	msgs := make([]string, 0, len(errs))
+	for _, e := range errs {
+		msgs = append(msgs, e.Error())
+	}
+	return strings.Join(msgs, "；")
 }
 
 // rulesOfSource 配置中指定源的规则组（无该源 ok=false）。

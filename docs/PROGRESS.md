@@ -108,3 +108,98 @@
 - [x] T7.3 position import + old2new
 - [~] T7.4 混沌/不变式测试（不变式测试已随里程碑就位：位点不超前断言/乱序 ack 万级并发/kill 重放收敛/elector takeover/门禁拒绝——专项随机 crash 注入（07 §6）挂后续会话）
 - [x] T7.5 runbook
+## 2026-11-04 配置面统一 sources[]：移除 v1 顶层形态兼容（用户决策）
+
+- **决策**：normalizeTree（v1 顶层 source/targets/rules 自动包装为
+  sources[default]）整体移除——配置面统一 `sources[]`，单源=数组一条；
+  顶层旧字段命中即报错并给改写指引（rejectV1Form；静默忽略不可接受）。
+  rawedit.SpliceSourceRules 的 v1 顶层 rules 特判同步删除（正文无
+  sources 键即报错）。推翻 PRD README D4 的「自动包装」半边；etcd 键
+  迁移（migrate_keys，落点恒 sources/default/）保留不动。
+- **升级语义变化**：v1 正文升级从「零修改」变为「一步改写」——包一层
+  `sources: [{id: "default", ...}]`；id 必须填 default 与键迁移落点对齐
+  （GUIDE §11 / RUNBOOK §9.4 / PRD 03 §4）。dev61 生产正文（v1 形态）
+  需一次性改写后再重启。
+- **测试**：multi_source_test 三个包装测试（V1Wrap/DualWrite/V1Partial）
+  换为拒绝测试（V1FormRejected/V1FormDualWriteRejected）；rawedit
+  V1_TopLevel 换 V1Rejected；其余 v1 形态夹具（config_test/bootstrap_test/
+  rule_group_test）改写为 sources[] 形态。L1 config/api/cmd 全绿。
+- **正文资产一次性迁移**（yaml.Node 手术保留注释/键序，产物全过
+  LoadFromRaw 真链）：examples/single.yml、examples/cluster.yml、
+  deploy/config.example.yml、deploy/config.edu-mall-dev.yml、
+  config.local.yml、.verify/v2/body_{main,single,hiprio,extra}.yml。
+- **顺带修 2 个存量问题**：① deploy/config.example.yml 密码裸数字
+  （`password: 123456`）从未通过加载链（JSON 桥 number→string 拒绝）→
+  加引号；② .verify/v2 组 95 资产相对 11-03 topic 命名改动过期——
+  body_extra.yml `topic_prefix: "cdc."` 会被 kafkaTopicRe 拒（且
+  TopicName 已改下划线分隔，脚本期望的 cdc.kafka12.big 派生不出来）→
+  对齐为 cdc_ / cdc_kafka12_big（95_extra.sh 三处 topic 引用同步）。
+
+### 2026-11-04 补：RulesManage 在线编辑与 v1 移除的冲突复核（全绿）
+
+并行会话落地「规则视图（按库）在线编辑」（RulesManage.tsx，包装既有
+PUT /sources/{sid}/rules 三道护栏，无新后端）。与本次 v1 移除的冲突面
+复核结论：唯一薄弱点 = 配置中心正文为 v1/坏正文时 GET/PUT rules 的 500
+只有笼统文案。已修：config_edit.go 三处错误响应带具体加载链错误明细
+（errsText）——v1 形态指引直达 UI。测试补齐：Go TestRouter_ConfigEdit_
+V1Body（raw 透传/GET/PUT 拒写矩阵）；前端纯逻辑抽 rulesManageLogic.ts
++ 10 用例（sink 双形态保留/diff 摘要）。验证：Windows L1 18 包 +
+WSL -race 三包 + api 集成（真 etcd）+ web typecheck/53 vitest/build
+全绿；dist 产物已重建一致。
+
+### 2026-11-04 补：TESTCASES 全层级验收跑通（L1/L2/L3 全绿，最终口径 111 PASS / 0 FAIL）
+
+用户问「docs 的所有测试 case 都跑了吗」→ 如实回答没跑全，随即补齐并修复一路
+暴露的测试资产腐化（均为多源改造（11-03）后未跟进的存量问题，产品代码零缺陷）：
+- **L2 全量 18 包**：testcontainers 全绿（L2_EXIT=0，此前只跑过 api 单包）。
+- **L3 第一轮 12 组**：8 绿 4 挂。修复清单：
+  ① `.verify/v2` 8 个脚本 CRLF 行尾污染（Windows 侧工具覆写；.gitattributes 只救
+  git 管的检出，run_group.sh 等 8 文件带 CR 秒挂全部组——`file *.sh | grep CRLF`
+  扫描 + sed 归一）；
+  ② 10_boot A2 坏配置正文还是 v1 形态 → 改写 sources[] 形态（新语义 rejectV1Form
+  短路 1 错是预期；预验 19 错 ≥15 达标）；
+  ③ 20_data H2 单发读采样 gauge（3s tick）竞态 → 轮询收敛窗口（r2 教训的漏网点）；
+  ④ body_mqonly.yml 从未存在（65_mq I7 灌空正文拒启 4 连挂）→ 按 body_extra 重建
+  sources[] 形态 + 凭据对齐 root/123456；
+  ⑤ body_extra 陈旧凭据 repl/src123（vf-src 只配 root）→ 对齐；
+  ⑥ 95_extra.sh 三重过时：旧顶层路由（/position/migrate-gtid、/verify，11-03 路由
+  收敛后一律 404）→ /sources/default/...；v1 位点键 /gocdc/verify/position →
+  sources/default 子树；本地 stateof 读旧版 /status 顶层形状（pipeline_state 已迁
+  sources[]）→ 按 id 过滤。
+- **运维事故一支**：上个会话退出只杀了 Windows 侧 wsl.exe，VM 里的重跑存活成孤儿
+  实例继续跑，与新一轮重跑并发争 flock、双写同一 .out 文件（tee 截断交错）——教训：
+  **重跑前必须 ps 查 VM 侧残留实例，flock 拦截信息「另一个脚本正在运行」时要先分清
+  是孤儿还是误报**。最终单实例补跑取证。
+- **POS-09b-3 断言口径**：追平判据改为数据实证（迁移重启后插入的探针行送达 =
+  重放收敛），lag gauge（3s 采样）降级为参考输出——与 B 系列第二层轮询同口径。
+- 终局：**12 组全绿（10:13/20:14/30:6/40:5/45:4/50:8/60:7/65:10/70:13/80:4/90:14/95:13，
+  合计 111 PASS / 0 FAIL）**。教训沉淀：**组 95 与键迁移演练类资产在每次路由/键空间
+  改造后必须实跑一轮**（这次 95 自 11-03 后从未真跑过，四类腐化叠加）。
+
+### 2026-11-04 补：启动默认值改造正确落地（用户意图 + 协议修复，定向验收绿）
+
+用户在 main.go 把四个 flag 默认值直接改为非空（cluster=gocdc-mysql、
+etcd=ETCD_HOSTS env、config-key=/config/edu.mall.gocdc/system、
+config-file=config.local.yml）——意图是公司约定零 flag 启动，但 flag 默认值
+非空让 ResolveStartup 无法区分「显式传参/默认」，三形态全炸（引导桩读错键、
+compose 纯 flag 因默认文件名非空直接 loadBootstrap 报错、ETCD_HOSTS 静默覆盖
+引导文件 etcd_addrs）。正确落地：
+- **pflag 默认值全部恢复空串**；回退链下沉 ResolveStartup：
+  `flag > env(仅 etcd: ETCD_HOSTS) > 引导文件 > 终极默认 > 报错`；
+- 终极默认：cluster=gocdc-mysql（config.DefaultClusterName）、配置键=
+  /config/edu.mall.gocdc/system（config.DefaultConfigCenterKey，公司约定
+  固定键）——**集群名不再参与配置键派生**（只定协调面前缀 /gocdc/{cluster}），
+  多集群共享配置中心 etcd 须桩 key / -config-key 显式区分；DefaultConfigKey
+  删除；
+- 帮助文本修正（用户原文 /configs 拼写与代码 /config 不一致）；
+- 联动：bootstrap_test（ETCD_HOSTS 防护 + env 回退新用例 + 新键断言 +
+  cluster 缺失改取默认）、lib.sh stub_start/flag_start 显式带
+  /gocdc/{cluster}/config、10/30/70/80/90 手写桩补 key、
+  deploy/docker-compose.edu-mall-dev.yml 补 -config-key（dev61 不补会在
+  下次重启读错键拒启）、stub 示例/compose 注释；
+- 文档：main.go 头注释、config README §1/§2.1/§2.3、GUIDE §11 前配置条、
+  arch03 §3.1 两段（键与集群分工）、RUNBOOK §3/§9.1、prd07 表、deploy
+  README/compose 注释；
+- 验收：L1 18 包 + WSL -race 两包绿；L3 定向 10_boot 13/13（桩形态）+
+  40_ha 5/5（flag_start 形态）绿。运维注意：dev61 若拉新镜像须同步本次
+  compose 改动（-config-key），或把 104 的正文迁到默认键后去掉该 flag。

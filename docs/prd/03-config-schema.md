@@ -63,7 +63,9 @@ func (s SourceSpec) ResolvePipeline(base Pipeline) Pipeline { ... }
 - 字符集：`^[a-z][a-z0-9_-]{1,31}$`（小写字母开头，总长 2~32，与
   cluster/topic 前缀字符集风格一致）。
 - cluster 内唯一（校验）。
-- `default` 为保留 id：v1 配置自动包装与 etcd 键迁移的落点（§4）。
+- `default` 为 etcd 旧键迁移的落点 id（§4；2026-11 起配置正文不再自动
+  包装，id 一律显式声明，`default` 无保留语义但升级场景须用它与键迁移
+  对齐）。
 - 用途：etcd key 段、指标 `source` label、API 路径段、日志字段、
   envelope `source` 字段——同一个值贯穿全部面。
 
@@ -132,22 +134,20 @@ rocketmq 目标键 = join(sort(name_servers), ",") + "/" + topic
 三类各自建 set，重复即收集为错误。注意与现行行为的差异：**单源部署
 下 V4 恒不触发**（集合大小 = 源数 = 1），零回归风险。
 
-## 4. v1 兼容映射（自动包装）
+## 4. v1 顶层形态移除（2026-11 用户决策）
 
-`Load` 在反序列化成功后、`Validate` 前做一次**规范化**：
+落地之初的「v1 自动包装为 `sources[default]`」兼容策略已移除：配置面
+统一 `sources[]`，单源即数组一条——统一一个处理逻辑，不保留双形态。
 
-```
-若配置体不含 sources 字段（或为空）且含顶层 source/targets/rules：
-    sources = [ { id: "default", source: <顶层 source>, targets: <顶层 targets>,
-                  rules: <顶层 rules>, pipeline: nil, stock: nil } ]
-    顶层 source/targets/rules 字段从有效配置中移除（内存视图统一为 v2）
-```
-
-- 同时给出顶层旧字段**和** `sources` → 报错（不允许双写歧义）。
-- 规范化后全部下游路径（校验/装配/API/迁移）只见 v2 结构，不存在
-  「单源特判」分支——这是兼容策略的关键：v1 不是一条平行代码路径，
-  只是 N=1 且 sid=default 的普通源。
-- v1 配置的 `pipeline/stock` 顶层段即集群默认，被唯一源继承，值不变。
+- `Load` 在 ${ENV} 解析后检测顶层 `source/targets/rules` 任一键 → 报错
+  并给改写指引（`sources: [{id: ..., source/targets/rules: ...}]`），
+  绝不静默忽略（根结构体无这些字段，无检查会被无声丢弃）。
+- 升级路径：旧正文人工包一层
+  `sources: [{id: "default", source/targets/rules 原样内嵌}]`——id 须填
+  `default` 与键迁移落点（PRD 04 §4）对齐，位点无感续用；改用其他 id
+  须先用 etcdctl 手工搬键（RUNBOOK §9.4/§9.3）。
+- v1 顶层 `pipeline/stock` 段改写后保持顶层位置（即集群默认模板），被
+  唯一源继承，值不变。
 
 ## 5. 完整示例（两源聚合 + 混合下游）
 

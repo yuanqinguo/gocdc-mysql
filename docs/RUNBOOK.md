@@ -30,8 +30,9 @@
 
 ## 3. 新增表接入
 1. 改配置（rules 加库级/表级规则）：Web「规则页 → 编辑规则」（校验+活体预检+CAS
-   写配置中心，`PUT /api/v1/sources/{sid}/rules`）或 etcdctl 直改
-   `/gocdc/{cluster}/config`。
+   写配置中心，`PUT /api/v1/sources/{sid}/rules`）或 etcdctl 直改配置中心键
+   （默认 `/config/edu.mall.gocdc/system`；多集群共享 etcd 时为显式区分键，如
+   `/gocdc/{cluster}/config`）。
 2. 重启（配置不热更；Web 保存成功后可直接「应用并重启」=
    `POST /api/v1/config/apply-restart?confirm=true`，优雅排空+位点终值+resign
    后退出，由编排拉起）。新表无 stock 标记 → 自动全量 → 增量接管。
@@ -67,9 +68,9 @@ sink 配置变更 + 暂停 → 切换 → 恢复。位点不受影响。
 
 ### 9.1 多源配置变更 / 新增源
 1. 改配置：Web 编辑（`PUT /api/v1/sources/{sid}/rules`，按源整组提交，服务端
-   全量校验 + 活体预检 + ModRevision CAS 防并发覆盖）或 etcdctl 直改
-   `/gocdc/{cluster}/config`（v2 YAML：`sources[]` 数组）→ 滚动重启生效
-   （不热更，现行口径）。
+   全量校验 + 活体预检 + ModRevision CAS 防并发覆盖）或 etcdctl 直改配置中心键
+   （默认 `/config/edu.mall.gocdc/system`；多集群共享 etcd 时为显式区分键）
+   （v2 YAML：`sources[]` 数组）→ 滚动重启生效（不热更，现行口径）。
 2. **集群滚动重启顺序**：先逐个重启 follower（带新配置回来当热备），最后重启
    leader（`POST /api/v1/config/apply-restart?confirm=true` 或编排层重启）。
    顺序颠倒不产生数据风险（旧配置=少同步，安全方向），只浪费一轮重启。
@@ -97,11 +98,15 @@ sink 配置变更 + 暂停 → 切换 → 恢复。位点不受影响。
 位点值结构（model/position.go）与快照标记结构跨版本不变，搬回即可用。
 
 ### 9.4 升级检查单（v1 → 多源就绪）
-1. 新二进制 + 现行 v1 配置启动一次：日志出现 `etcd_keys_migrated`（键迁移
-   完成，旧 position/stock/DDL 键搬到 sources/default/）。
-2. 指标出现 `source="default"` label（源私有指标 label 化；告警查询同步
+1. 配置正文先改写：顶层 `source/targets/rules` 包一层
+   `sources: [{id: "default", ...}]`（id 必须填 `default`——键迁移固定落
+   sources/default/，改名即对不上位点）。顶层旧形态已被新二进制拒绝
+   （2026-11 移除自动包装）。
+2. 新二进制启动一次：日志出现 `etcd_keys_migrated`（键迁移完成，旧
+   position/stock/DDL 键搬到 sources/default/）。
+3. 指标出现 `source="default"` label（源私有指标 label 化；告警查询同步
    更新——不带 source 的选择器仍命中，sum 类聚合不受影响）。
-3. Web 顶栏出现源选择器（多源时；单源隐藏）。
+4. Web 顶栏出现源选择器（多源时；单源隐藏）。
 
 ### 9.5 容量规划（部署 checklist）
 - 源数上限 64（配置校验硬上限）。

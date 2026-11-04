@@ -44,7 +44,10 @@ services:
       GOCDC_WEB_USER: ${GOCDC_WEB_USER:-admin}
       GOCDC_WEB_PASSWORD: ${GOCDC_WEB_PASSWORD}
       TZ: Asia/Shanghai
-    command: ["-cluster", "edu-mall-dev", "-etcd", "192.168.112.104:2379"]
+    # -config-key 显式给集群作用域键（配置正文在 104 的 /gocdc/edu-mall-dev/config）；
+    # 不给则读公司约定默认键 /config/edu.mall.gocdc/system（2026-11 键默认策略变更）
+    command: ["-cluster", "edu-mall-dev", "-etcd", "192.168.112.104:2379",
+              "-config-key", "/gocdc/edu-mall-dev/config"]
     ports:
       - "8060:8060"   # Web admin
       - "9595:9595"   # metrics

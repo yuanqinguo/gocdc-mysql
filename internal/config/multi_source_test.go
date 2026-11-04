@@ -2,14 +2,14 @@ package config
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
-// v1Body 一份合法 v1 配置正文（顶层 source/targets/rules），供包装测试复用。
+// v1Body 一份 v1 配置正文（顶层 source/targets/rules——已移除的形态），
+// 供拒绝测试复用。
 const v1Body = `cluster: c1
 source:
   addr: "10.0.0.1:3306"
@@ -51,65 +51,22 @@ func loadYML(t *testing.T, body string) LoadResult {
 	return Load(context.Background(), path, "", "c1", nil)
 }
 
-// TestNormalize_V1Wrap v1 配置自动包装为 default 源（PRD 03 §4）：
-// 值逐项保留、id=default、顶层旧字段从有效视图移除（序列化只见 v2）。
-func TestNormalize_V1Wrap(t *testing.T) {
+// TestV1FormRejected 顶层 source/targets/rules（v1 单源形态）显式报错并给
+// sources[] 改写指引——不再自动包装（2026-11 用户决策：配置面统一 sources[]，
+// 单源=数组一条；静默忽略不可接受，根结构体无这些字段）。
+func TestV1FormRejected(t *testing.T) {
 	res := loadYML(t, v1Body)
-	if len(res.Errors) != 0 {
-		t.Fatalf("v1 配置应零错误: %v", res.Errors)
-	}
-	c := res.Config
-	if len(c.Sources) != 1 {
-		t.Fatalf("应包装为唯一源: %d", len(c.Sources))
-	}
-	s := c.Sources[0]
-	if s.ID != "default" {
-		t.Fatalf("v1 包装源 id 应为 default: %q", s.ID)
-	}
-	if s.Source.Addr != "10.0.0.1:3306" || s.Source.Password != "p" || s.Source.ServerID != 1 {
-		t.Fatalf("source 块值应原样下沉: %+v", s.Source)
-	}
-	if !s.Targets.MySQL.Enabled || s.Targets.MySQL.TxChunkRows != 500 {
-		t.Fatalf("targets 块值应原样下沉: %+v", s.Targets.MySQL)
-	}
-	if len(s.Rules) != 1 || s.Rules[0].Schema != "db1" {
-		t.Fatalf("rules 应原样下沉: %+v", s.Rules)
-	}
-	// v1 顶层 pipeline 即集群默认，被唯一源继承（值不变）
-	if s.Pipeline == nil || s.Pipeline.Workers != 4 || s.Pipeline.FlushIntervalMS != 200 {
-		t.Fatalf("pipeline 继承集群默认失败: %+v", s.Pipeline)
-	}
-	// 序列化输出只含 v2 结构（无顶层 source/targets/rules）
-	out := strings.ToLower(string(mustJSON(t, c)))
-	for _, k := range []string{`"source":`, `"targets":`, `"rules":`} {
-		// 顶层旧字段名仍会以源内字段出现，检查顶层反序列化回读无旧字段即可：
-		// 重新 Unmarshal 到 v2 结构不报未知字段冲突（不严格解码），此处改为
-		// 断言 sources 数组存在且首元素带 id=default。
-		_ = k
-	}
-	if !strings.Contains(out, `"sources"`) || !strings.Contains(out, `"default"`) {
-		t.Fatal("序列化应为 v2 结构（sources[] 含 default）")
+	if !containsErr(res.Errors, "v1 单源形态已移除") || !containsErr(res.Errors, "sources") {
+		t.Fatalf("v1 形态应报错并指引改写: %v", res.Errors)
 	}
 }
 
-func mustJSON(t *testing.T, c *Config) []byte {
-	t.Helper()
-	b, err := json.Marshal(c)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return b
-}
-
-// TestNormalize_DualWrite 双写报错（顶层旧字段 + sources 同时给出）。
-func TestNormalize_DualWrite(t *testing.T) {
-	res := loadYML(t, v1Body+"  # v1 全量正文\nsources:\n  - id: other\n")
-	if len(res.Errors) == 0 {
-		t.Fatal("双写应报错")
-	}
-	if !strings.Contains(res.Errors[len(res.Errors)-1].Error(), "不允许双写") &&
-		!containsErr(res.Errors, "不允许双写") {
-		t.Fatalf("双写错误应包含「不允许双写」: %v", res.Errors)
+// TestV1FormDualWriteRejected 顶层旧字段与 sources 同时给出：v1 检测先行报错
+//（不做双写裁决——两形态不允许共存）。
+func TestV1FormDualWriteRejected(t *testing.T) {
+	res := loadYML(t, v1Body+"\nsources:\n  - id: other\n")
+	if !containsErr(res.Errors, "v1 单源形态已移除") {
+		t.Fatalf("双写应报 v1 形态错误: %v", res.Errors)
 	}
 }
 
@@ -122,8 +79,8 @@ func containsErr(errs []error, sub string) bool {
 	return false
 }
 
-// TestNormalize_EmptySources 两边都没有 → V1 报「sources 不能为空」。
-func TestNormalize_EmptySources(t *testing.T) {
+// TestEmptySources 两边都没有 → V1 报「sources 不能为空」。
+func TestEmptySources(t *testing.T) {
 	res := loadYML(t, "cluster: c1\nha: { lease_ttl_seconds: 10 }\nobservability: { metrics_addr: \":9595\", log: { level: info } }\n")
 	if !containsErr(res.Errors, "sources 不能为空") {
 		t.Fatalf("空配置应报 sources 至少 1 条: %v", res.Errors)
@@ -387,15 +344,6 @@ observability:
 	}
 	if ids := c.SourceIDs(); len(ids) != 2 || ids[0] != "order-center" || ids[1] != "user-center" {
 		t.Fatalf("SourceIDs 应保序: %v", ids)
-	}
-}
-
-// TestNormalize_V1PartialFields v1 只给部分顶层字段（如只有 source 无 targets）→
-// 包装后按缺失项逐项报错（定位 [sources/default]），不 panic。
-func TestNormalize_V1PartialFields(t *testing.T) {
-	res := loadYML(t, "cluster: c1\nsource:\n  addr: \"10.0.0.1:3306\"\nha: { lease_ttl_seconds: 10 }\nobservability: { metrics_addr: \":9595\", log: { level: info } }\n")
-	if !containsErr(res.Errors, "[sources/default] targets") || !containsErr(res.Errors, "[sources/default] rules") {
-		t.Fatalf("v1 部分字段应包装后逐项报缺: %v", res.Errors)
 	}
 }
 

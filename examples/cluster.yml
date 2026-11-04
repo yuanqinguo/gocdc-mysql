@@ -1,5 +1,6 @@
 # ─────────────────────────────────────────────────────────────────────
 # HA 集群形态示例（config_version: 2）
+#   配置统一 sources[] 形态：单源部署即数组一条（本例 id=default）。
 #   ha.enabled: true —— 同一配置部署 N 个节点（各进程指到同一协调面 etcd
 #   与配置中心），etcd 选举产生唯一 leader 承担管线，其余 standby 热备；
 #   leader 宕机后租约过期，standby 接管并从 etcd 位点续传（零丢失）。
@@ -11,71 +12,67 @@
 # 本文件可在验证环境跑通（.verify/v2/examples_accept.sh，双节点验收）：
 #   源/目标为本机映射端口；集群名 gocdc-cluster（etcd 键前缀 /gocdc/gocdc-cluster）。
 # ─────────────────────────────────────────────────────────────────────
+
 config_version: 2
 cluster: gocdc-cluster
+sources:
+  - id: "default"
+    source:
+      addr: "127.0.0.1:13306"
+      user: root
+      password: "123456" # 生产：${SRC_PASSWORD}
+      charset: utf8mb4
+      flavor: mysql
+      server_id: 12346 # 多副本共用一份配置：显式同值即同 dump 身份
+      timezone: Asia/Shanghai
+      heartbeat_interval_ms: 3000
+      read_timeout_ms: 60000
+      exclude_schemas: [mysql, sys, information_schema, performance_schema]
+      use_gtid: true
+    targets:
+      mysql:
+        enabled: true
+        addr: "127.0.0.1:13307"
+        user: root
+        password: "123456" # 生产：${DST_PASSWORD}
+        charset: utf8mb4
+        max_open_conns: 20
+        max_idle_conns: 5
+        conn_max_lifetime_min: 30
+        tx_chunk_rows: 500
+        target_database: "" # 空=与源库同名
+        ddl_sync: true
+    rules:
+      - schema: shop
+        sinks: {mysql: true}
+        ddl_policy: pause # 集群形态推荐 pause：DDL 审批走 Web（follower
+        # 也能审批，leader 执行）
 
-source:
-  addr: "127.0.0.1:13306"
-  user: root
-  password: "123456"             # 生产：${SRC_PASSWORD}
-  charset: utf8mb4
-  flavor: mysql
-  server_id: 12346               # 多副本共用一份配置：显式同值即同 dump 身份
-  timezone: Asia/Shanghai
-  heartbeat_interval_ms: 3000
-  read_timeout_ms: 60000
-  exclude_schemas: [mysql, sys, information_schema, performance_schema]
-  use_gtid: true
-
-node: {}                         # 多副本各自自动派生 node.id（节点注册互不覆盖）
-
+        tables:
+          - {table: orders, order_by_column: id, do_stock: true}
+          - {table: users, order_by_column: id, do_stock: false} # 只增量
+node: {} # 多副本各自自动派生 node.id（节点注册互不覆盖）
 ha:
-  enabled: true                  # 集群：etcd 选举（lease_ttl 决定切换时长）
+  enabled: true # 集群：etcd 选举（lease_ttl 决定切换时长）
   lease_ttl_seconds: 10
   leader_check_interval_ms: 2000
   resign_on_shutdown: true
-
 pipeline:
   workers: 4
   worker_queue_size: 8192
   batch_size: 500
   flush_interval_ms: 200
   position_save_interval_ms: 3000
-
 stock:
   lock_mode: auto
   chunk_rows: 5000
   throttle_ms: 0
   workers: 4
-
-targets:
-  mysql:
-    enabled: true
-    addr: "127.0.0.1:13307"
-    user: root
-    password: "123456"           # 生产：${DST_PASSWORD}
-    charset: utf8mb4
-    max_open_conns: 20
-    max_idle_conns: 5
-    conn_max_lifetime_min: 30
-    tx_chunk_rows: 500
-    target_database: ""          # 空=与源库同名
-    ddl_sync: true
-
-rules:
-  - schema: shop
-    sinks: { mysql: true }
-    ddl_policy: pause            # 集群形态推荐 pause：DDL 审批走 Web（follower
-                                 # 也能审批，leader 执行）
-    tables:
-      - { table: orders, order_by_column: id, do_stock: true }
-      - { table: users, order_by_column: id, do_stock: false }   # 只增量
-
 observability:
-  metrics_addr: ${METRICS_ADDR}                # /metrics /healthz /readyz（生产写实际端口，如 ":9595"）
+  metrics_addr: ${METRICS_ADDR} # /metrics /healthz /readyz（生产写实际端口，如 ":9595"）
   web:
     enabled: true
-    addr: ${WEB_ADDR}                  # admin API + 控制台 /api/v1（生产写实际端口，如 ":8060"）
+    addr: ${WEB_ADDR} # admin API + 控制台 /api/v1（生产写实际端口，如 ":8060"）
     username: admin
     password: ${WEB_PASSWORD}
     auth_disabled: false

@@ -16,15 +16,18 @@
 ```text
 gocdc                        # 零参数（GoLand 调试形态）
 gocdc -config-file <yml>     # 指定引导/配置文件
+ETCD_HOSTS=<addrs> gocdc     # 公司约定形态：env 给 etcd，零 flag
 gocdc -cluster <n> -etcd <addrs> [-config-key <path>] [-config-file <yml>]   # flag 覆盖/纯 flag 形态
   │
-  ├─ ⓪ 启动裁决（flag > 引导文件 > 报错，§2.3）：
+  ├─ ⓪ 启动裁决（flag > 环境变量 > 引导文件 > 终极默认 > 报错，§2.3）：
   │     定位引导文件（-config-file 或工作目录 config.local.yml）→ 得出
-  │     cluster / 配置来源 / 协调面 etcd 地址（位点/选举，与配置中心可不同实例）
+  │     cluster（终极默认 gocdc-mysql）/ 配置来源 / 协调面 etcd 地址
+  │     （-etcd > ETCD_HOSTS > bootstrap.etcd_addrs；与配置中心可不同实例）
   │
   ├─ file 形态（引导文件即全量配置，开发）
-  └─ etcd 形态 / 纯 flag     → 读配置中心 etcd key：/gocdc/{cluster}/config
-        │
+  └─ etcd 形态 / 纯 flag     → 读配置中心 etcd key：
+        │                       默认 /config/edu.mall.gocdc/system（公司约定固定键）；
+        │                       多集群共享 etcd 时以桩 key / -config-key 显式区分
         ① 解析为配置树（YAML 唯一格式，不做 JSON 兼容）
            + ${ENV} 占位替换（引用了未设置的环境变量 → 报错）
         ② cluster 裁决：配置体里的 "cluster" 必须 == 裁决后的 cluster，否则拒绝启动
@@ -38,8 +41,12 @@ gocdc -cluster <n> -etcd <addrs> [-config-key <path>] [-config-file <yml>]   # f
 
 1. **fail-fast**：etcd 读取失败、key 不存在、任何校验错误 → 启动即退出，绝不带
    空/旧/部分配置运行。
-2. **`-cluster` flag 是 key 前缀的唯一来源**：进程永远读 `/gocdc/{flag}/config`；
-   配置体里的 `cluster` 字段只是冗余校验（防止把 A 集群的配置错装给 B 集群）。
+2. **键与集群分工**：`-cluster`（终极默认 `gocdc-mysql`）决定**协调面** key 前缀
+   `/gocdc/{cluster}/`（位点/选举）；**配置中心** key 终极默认
+   `/config/edu.mall.gocdc/system`（公司约定固定键，不随集群变）——多集群共享
+   同一配置中心 etcd 时，各集群以引导桩 `config_center.key` 或 `-config-key`
+   显式区分。配置体里的 `cluster` 字段只是冗余校验（防止把 A 集群的配置错装给
+   B 集群）。
 3. **错误一次报全**：校验不做短路，一次列出所有问题，改完一处不用反复重启试错。
 
 ---
@@ -49,15 +56,20 @@ gocdc -cluster <n> -etcd <addrs> [-config-key <path>] [-config-file <yml>]   # f
 ### 2.1 生产：配置写入 etcd，单 key
 
 ```bash
-# key 固定为 /gocdc/{cluster}/config
-etcdctl put /gocdc/edu-merge-prod/config < config.yaml
+# 默认键 = 公司约定固定键 /config/edu.mall.gocdc/system
+etcdctl put /config/edu.mall.gocdc/system < config.yaml
 
-# 启动（多副本用同一份配置，靠 etcd 选举决定谁是 leader）
-gocdc -cluster edu-merge-prod -etcd 10.0.5.1:2379,10.0.5.2:2379
+# 公司约定形态：ETCD_HOSTS 给 etcd，零 flag 启动（cluster 默认 gocdc-mysql）
+ETCD_HOSTS=10.0.5.1:2379 gocdc
+
+# 或显式 flag（多副本用同一份配置，靠 etcd 选举决定谁是 leader）
+gocdc -etcd 10.0.5.1:2379,10.0.5.2:2379
 ```
 
-- 一个 etcd 可存多个集群的配置，靠 key 前缀 `/gocdc/{cluster}/` 天然隔离。
-- 自定义 key 用 `-config-key`（一般不需要）。
+- 单环境单服务：默认键即用，零 flag（有 ETCD_HOSTS 时）或只给 `-etcd`。
+- **多集群共享同一配置中心 etcd**：各集群显式区分配置键——引导桩
+  `config_center.key` 或 `-config-key`（惯例 `/gocdc/{cluster}/config`）；
+  协调面前缀 `/gocdc/{cluster}/` 仍按集群天然隔离。
 - 配置里含密码等敏感信息时用 `${ENV}` 占位（§3），配合 etcd 自身的 auth/TLS。
 
 ### 2.2 开发：本地文件（零命令行参数）
@@ -81,8 +93,10 @@ bootstrap:
 
 ### 2.3 引导文件与多环境（一个配置中心 etcd 服务多环境）
 
-启动裁决优先级：**flag > 引导文件 > 报错**（`config.ResolveStartup`，启动方式
-三选一：零参数读 `config.local.yml`；引导桩；显式 flag 形态）。
+启动裁决优先级：**flag > 环境变量（仅 etcd：`ETCD_HOSTS`）> 引导文件 > 终极默认
+（cluster=`gocdc-mysql`、配置键=`/config/edu.mall.gocdc/system`）> 报错**
+（`config.ResolveStartup`，启动方式：零参数读 `config.local.yml`；引导桩；
+`ETCD_HOSTS=<addrs> gocdc` 公司约定形态；显式 flag 形态）。
 
 引导文件同一文件两种形态，`bootstrap.config_source` 区分（空 = 自动推断：
 有 config_center 则 etcd，否则 file）：
@@ -100,17 +114,18 @@ bootstrap:
   etcd_addrs: ["10.0.5.11:2379"]          # 协调面（位点/选举）——缺省回退配置中心
   config_center:
     etcd_addrs: ["cfg.etcd.internal:2379"] # 配置中心
+    # key: "/gocdc/edu-merge-prod/config"  # 多集群共享 etcd 时显式区分；缺省 = 公司固定键
 ```
 
 **两个 etcd 角色可分离**：
 
 | 角色 | 配置项 | 承担 |
 |------|--------|------|
-| 配置中心 | `bootstrap.config_center.etcd_addrs` | 全量配置存放；一个 etcd 按 `/gocdc/{cluster}/config` 前缀隔离多环境 |
-| 协调面 | `bootstrap.etcd_addrs`（缺省回退配置中心） | 位点/选举/DDL 门/审计 |
+| 配置中心 | `bootstrap.config_center.etcd_addrs`（+ 可选 `key`） | 全量配置存放；key 默认 `/config/edu.mall.gocdc/system`，多集群/多环境显式给 `key` 区分 |
+| 协调面 | `bootstrap.etcd_addrs`（缺省回退配置中心） | 位点/选举/DDL 门/审计；前缀 `/gocdc/{cluster}/` 按集群隔离 |
 
-纯 flag 形态（无引导文件）：`-cluster <n> -etcd <addrs>` 必填，
-同一 etcd 兼任配置中心与协调面（docker-compose/CI 即此形态）。
+纯 flag 形态（无引导文件）：`-etcd`（或 `ETCD_HOSTS`）必填（`-cluster` 缺省
+`gocdc-mysql`），同一 etcd 兼任配置中心与协调面（docker-compose/CI 即此形态）。
 
 ---
 
@@ -132,35 +147,38 @@ web:
 
 ## 4. 最小可用配置（可直接复制）
 
-只包含全部必填项，其余走默认值，可通过所有校验：
+只包含全部必填项，其余走默认值，可通过所有校验。配置面统一 `sources[]`
+（§4.5）：单源部署就是数组一条：
 
 ```yaml
 cluster: dev
-source:
-  addr: "10.0.0.1:3306"
-  user: repl
-  password: "${GOCDC_SOURCE_PWD}"
-  charset: utf8mb4
-  flavor: mysql
-  server_id: 123456
-  timezone: Asia/Shanghai
-  exclude_schemas: [mysql, sys, information_schema, performance_schema]
 ha: { lease_ttl_seconds: 10 }
 pipeline: { workers: 4, worker_queue_size: 8192, batch_size: 500 }
-targets:
-  mysql:
-    enabled: true
-    addr: "10.0.1.1:3306"
-    user: writer
-    password: "${GOCDC_TARGET_PWD}"
-    charset: utf8mb4
-    max_open_conns: 20
-    tx_chunk_rows: 500
-rules:
-  - schema: edu.mall.admin
-    sinks: { mysql: true }
-    tables:
-      - { table: admin_user, order_by_column: id, do_stock: true }
+sources:
+  - id: main                     # 源标识：^[a-z][a-z0-9_-]{1,31}$，cluster 内唯一
+    source:
+      addr: "10.0.0.1:3306"
+      user: repl
+      password: "${GOCDC_SOURCE_PWD}"
+      charset: utf8mb4
+      flavor: mysql
+      server_id: 123456
+      timezone: Asia/Shanghai
+      exclude_schemas: [mysql, sys, information_schema, performance_schema]
+    targets:
+      mysql:
+        enabled: true
+        addr: "10.0.1.1:3306"
+        user: writer
+        password: "${GOCDC_TARGET_PWD}"
+        charset: utf8mb4
+        max_open_conns: 20
+        tx_chunk_rows: 500
+    rules:
+      - schema: edu.mall.admin
+        sinks: { mysql: true }
+        tables:
+          - { table: admin_user, order_by_column: id, do_stock: true }
 observability:
   metrics_addr: ":9595"
   log: { level: info }
@@ -171,26 +189,27 @@ observability:
 | 字段 | 要求 |
 |------|------|
 | `cluster` | == `-cluster` flag |
-| `source.addr/user/charset/flavor/timezone` | 非空；`flavor` ∈ mysql/mariadb |
-| `source.server_id` | **可省略**：缺省按 node.id 自动派生（fnv32，etcd 配置中心共享一份配置时各副本天然不同）；显式配置须全网唯一（与所有从库、canal 等订阅者不冲突） |
-| `source.exclude_schemas` | 必须包含四个系统库，只能追加不能移除 |
+| `sources` | ≥1 条（单源部署同样是数组一条）；顶层 `source/targets/rules` 旧形态已移除，命中即报错 |
+| `sources[].id` | ^[a-z][a-z0-9_-]{1,31}$，cluster 内唯一 |
+| `sources[].source.addr/user/charset/flavor/timezone` | 非空；`flavor` ∈ mysql/mariadb |
+| `sources[].source.server_id` | **可省略**：缺省按 node.id:sid 自动派生（fnv32，etcd 配置中心共享一份配置时各副本天然不同）；显式配置须全网唯一（与所有从库、canal 等订阅者不冲突） |
+| `sources[].source.exclude_schemas` | 必须包含四个系统库，只能追加不能移除 |
 | `ha.lease_ttl_seconds` | ≥2（建议 10） |
 | `pipeline.workers / worker_queue_size / batch_size` | ≥1（workers ≤64） |
-| `targets.*` | 至少启用一个下游 |
-| `targets.mysql.max_open_conns / tx_chunk_rows` | 启用 mysql 时必须显式 ≥1 |
-| `rules` | ≥1 组；每组 `schema` 唯一、`sinks` 至少开一个、`tables` 非空且逐表显式 `do_stock` |
+| `sources[].targets.*` | 每源至少启用一个下游 |
+| `sources[].targets.mysql.max_open_conns / tx_chunk_rows` | 启用 mysql 时必须显式 ≥1 |
+| `sources[].rules` | ≥1 组；每组 `schema` 唯一、`sinks` 至少开一个、`tables` 非空且逐表显式 `do_stock` |
 | `observability.metrics_addr` | 合法 `addr:port` |
 
 ---
 
-## 4.5 多源配置（`sources[]`，配置 v2）
+## 4.5 源级结构（`sources[]`）与多源
 
-单进程承载多条 MySQL 同步源（多源 PRD）：上面 §4 的单源写法（顶层
-`source/targets/rules`）是 **v1 形态**，加载后自动包装为
-`sources: [{id: "default", ...}]`——行为零变化，老配置不用改。
-
-v2 把 `source/targets/rules` 下沉到 `sources[]` 数组元素；顶层 `pipeline/stock`
-变为**集群级默认模板**，源级同名段是覆盖补丁：
+`source/targets/rules` 一律写在 `sources[]` 数组元素内（2026-11 用户决策：
+统一一个处理逻辑，单源即数组一条，不再支持/自动包装顶层旧形态）。
+单进程可承载多条 MySQL 同步源（1..64）：每源独立的源连接、规则、下游、
+位点子树（`/gocdc/{cluster}/sources/{sid}/…`）、全量标记与 DDL 审批；
+顶层 `pipeline/stock` 变为**集群级默认模板**，源级同名段是覆盖补丁：
 
 ```yaml
 cluster: mall-aggregate
@@ -200,9 +219,9 @@ stock: { lock_mode: auto, chunk_rows: 5000 }
 
 sources:                       # 1..64 条
   - id: order-center           # 源标识：^[a-z][a-z0-9_-]{1,31}$，cluster 内唯一
-    source: { ... }            # §4 的 source 块原样下沉（该源独立的源库连接）
-    targets: { ... }           # §5 的 targets 块原样下沉（该源独立连接池/生产者）
-    rules: [ ... ]             # §6 的规则组原样下沉（schema 源内唯一即可）
+    source: { ... }            # §4 的 source 块（该源独立的源库连接）
+    targets: { ... }           # §5 的 targets 块（该源独立连接池/生产者）
+    rules: [ ... ]             # §6 的规则组（schema 源内唯一即可）
     pipeline: { workers: 8 }   # 可选覆盖：只覆盖 workers，其余继承集群默认
   - id: user-center
     source: { ... }            # 省略 pipeline/stock 段 → 全继承集群默认
@@ -214,9 +233,8 @@ sources:                       # 1..64 条
 
 | 主题 | 规则 |
 |------|------|
-| **id** | 小写字母开头，`[a-z0-9_-]`，总长 2~32；`default` 保留给 v1 包装与键迁移 |
+| **id** | 小写字母开头，`[a-z0-9_-]`，总长 2~32，cluster 内唯一；etcd 键段/指标 label/API 路径（`/api/v1/sources/{sid}/…`）共用。id 一经部署不可随手改（位点子树跟着 sid 走） |
 | **继承** | 源级段省略 = 全继承；段内字段省略 = 该字段继承集群默认；合并后统一填默认值——校验与运行时看到的是每源的完整值 |
-| **v1 双写** | 顶层旧字段与 `sources` 同时出现 → 报错（不允许歧义） |
 | **跨源目标不相交**（校验期拦死） | MySQL：全部源的 effective `(addr, target_database, table)` 三元组全局唯一；Kafka：`(排序后 brokers, effective topic)`；RocketMQ：`(排序后 name_servers, effective topic)`。两源写同一 topic/目标表 = 数据互覆/乱序。跨源写**不同**目标库的同名表不受影响 |
 | **同实例多源** | 两个源 `source.addr` 完全相同且 `server_id` 相同 → 报错（互踢必然发生）；必须显式配置互异 server_id。`server_id` 缺省（0）按 `fnv32a(node_id:sid)` 派生，同进程天然互异 |
 | **每源独立资源** | targets 是每源独立的连接池/生产者（指向同一实例也各建各的池）；目标库 `max_connections` 按全部源合计规划 |
@@ -234,22 +252,6 @@ node:
   id: ""                    # 空 = "{hostname}-{8位随机}"；k8s 建议注入 POD_NAME
   advertise_addr: ""        # 空 = "本机IP:web端口"；Web 页面用它定位节点
 
-# ── 源库：binlog 从哪来 ──
-source:
-  addr: "10.0.0.1:3306"
-  user: repl                        # 需 REPLICATION SLAVE/CLIENT + SELECT 权限
-  password: "${GOCDC_SOURCE_PWD}"
-  charset: utf8mb4
-  flavor: mysql                     # mysql | mariadb
-  server_id: 123456                 # 伪从库 ID，可省略：缺省按 node.id 自动派生（共享配置的多副本天然不同）；显式配置须全网唯一，冲突会互相踢下线
-  timezone: Asia/Shanghai           # DATETIME 值的解释时区，必须显式声明
-  use_gtid: false                   # true 时位点含 GTID 集合（源库需开 GTID）
-  heartbeat_interval_ms: 3000       # 0 = 默认 3000；低流量库靠心跳推进位点防误判掉线
-  read_timeout_ms: 60000            # 0 = 默认 60000
-  exclude_schemas: [mysql, sys, information_schema, performance_schema]
-                                    # 四系统库必须保留；可追加如 shard_tmp
-  tls: { enabled: false, skip_verify: false, ca: "", cert: "", key: "" }
-
 # ── 选举：多副本部署时谁拉 binlog ──
 ha:
   enabled: true                     # 集群模式开关（缺省开启）：false=单节点，跳过选举
@@ -262,6 +264,7 @@ ha:
   resign_on_shutdown: true          # 优雅停机主动让位，standby 立即接管
 
 # ── 管线：攒批语义 = 攒满 batch_size 条 或 超 flush_interval_ms，先到先发 ──
+# （集群级默认模板；源级 pipeline/stock 段可逐项覆盖，见 §4.5）
 pipeline:
   workers: 4                        # 1..64；按表分片，同表串行保序、异表并行
   worker_queue_size: 8192           # 每 worker 有界队列；打满反压阻塞拉取
@@ -273,51 +276,68 @@ pipeline:
   decimal_as: string                # DECIMAL 承载：string（无损，默认）| float（有精度风险）
   zero_datetime_as: "null"          # 零日期（0000-00-00…）：null（默认，+计数）| string（原样透传）
 
-# ── 下游：至少 enabled 一个；同一规则可同时写多个 ──
-targets:
-  mysql:
-    enabled: true
-    addr: "10.0.1.1:3306"
-    user: writer
-    password: "${GOCDC_TARGET_PWD}"
-    charset: utf8mb4
-    max_open_conns: 20              # 必须显式 ≥1（不设默认：无上限连接会打爆目标库）
-    max_idle_conns: 5               # 0 = 默认 5
-    conn_max_lifetime_min: 30       # 0 = 默认 30
-    tx_chunk_rows: 500              # 单事务最大行数，大事务切批
-    ddl_sync: true                  # 允许 ddl_policy=auto 的白名单 DDL 在目标端执行
-  kafka:
-    enabled: true
-    brokers: ["10.0.2.1:9092", "10.0.2.2:9092"]
-    topic_prefix: "cdc_"            # 默认 topic = 前缀 + "{db}_{table}"（Kafka/RocketMQ 统一规范，点号不收）
-    order_by: row                   # row: key=主键，同行有序（推荐）；table: 整表全有序
-    compression: snappy             # none|gzip|snappy|lz4|zstd
-    idempotent_producer: true       # 幂等 producer，重试不重复不乱序
-    ack: all                        # all 不丢 | one 低延迟
-    send_timeout_ms: 5000           # 0 = 默认 5000
-    max_message_bytes: 1048576      # 必填 [1KB,100MB]，且 ≤ broker max.message.bytes
-    sasl: { enabled: false, mechanism: "", user: "", password_env: "" }
-    tls: { enabled: false, skip_verify: false, ca: "", cert: "", key: "" }
-  rocketmq:
-    enabled: false                  # false 时不校验、不连接
-    name_servers: ["10.0.3.1:9876"]
-    group: gocdc-producer
-    topic_prefix: "CDC_"
-    order_by: row
-    send_timeout_ms: 5000
-    send_concurrency: 32            # 0 = 默认 32；组间并发发送上限（组内仍严格串行）
-    acl: { access_key: "", secret_key: "${ROCKETMQ_SECRET}" }
-
-# ── 规则：组形态白名单——哪个库的哪些表写到哪些下游（详见 §6）──
-rules:
-  - schema: edu.mall.admin          # 一组一库
-    ddl_policy: auto                # 组级：auto | pause | ignore；省略 = pause
-    sinks: { mysql: true, kafka: true }
-    tables:                         # 白名单：未列入的表（含未来新表）不同步
-      - { table: admin_user, order_by_column: id, do_stock: true,
-          mask_columns: { phone: phone } }
-      - { table: subjects,   order_by_column: id, do_stock: true }
-      - { table: tmp_log,    order_by_column: id, do_stock: false }  # 只增量不快照
+# ── 同步源：sources[] 统一形态（单源=数组一条；多源在数组里追加条目）──
+sources:
+  - id: main                        # 源标识（位点子树/指标 label/API 路径共用）
+    # ── 源库：binlog 从哪来 ──
+    source:
+      addr: "10.0.0.1:3306"
+      user: repl                    # 需 REPLICATION SLAVE/CLIENT + SELECT 权限
+      password: "${GOCDC_SOURCE_PWD}"
+      charset: utf8mb4
+      flavor: mysql                 # mysql | mariadb
+      server_id: 123456             # 伪从库 ID，可省略：缺省按 node.id:sid 自动派生（共享配置的多副本天然不同）；显式配置须全网唯一，冲突会互相踢下线
+      timezone: Asia/Shanghai       # DATETIME 值的解释时区，必须显式声明
+      use_gtid: false               # true 时位点含 GTID 集合（源库需开 GTID）
+      heartbeat_interval_ms: 3000   # 0 = 默认 3000；低流量库靠心跳推进位点防误判掉线
+      read_timeout_ms: 60000        # 0 = 默认 60000
+      exclude_schemas: [mysql, sys, information_schema, performance_schema]
+                                    # 四系统库必须保留；可追加如 shard_tmp
+      tls: { enabled: false, skip_verify: false, ca: "", cert: "", key: "" }
+    # ── 下游：至少 enabled 一个；同一规则可同时写多个（每源独立连接池）──
+    targets:
+      mysql:
+        enabled: true
+        addr: "10.0.1.1:3306"
+        user: writer
+        password: "${GOCDC_TARGET_PWD}"
+        charset: utf8mb4
+        max_open_conns: 20          # 必须显式 ≥1（不设默认：无上限连接会打爆目标库）
+        max_idle_conns: 5           # 0 = 默认 5
+        conn_max_lifetime_min: 30   # 0 = 默认 30
+        tx_chunk_rows: 500          # 单事务最大行数，大事务切批
+        ddl_sync: true              # 允许 ddl_policy=auto 的白名单 DDL 在目标端执行
+      kafka:
+        enabled: true
+        brokers: ["10.0.2.1:9092", "10.0.2.2:9092"]
+        topic_prefix: "cdc_"        # 默认 topic = 前缀 + "{db}_{table}"（Kafka/RocketMQ 统一规范，点号不收）
+        order_by: row               # row: key=主键，同行有序（推荐）；table: 整表全有序
+        compression: snappy         # none|gzip|snappy|lz4|zstd
+        idempotent_producer: true   # 幂等 producer，重试不重复不乱序
+        ack: all                    # all 不丢 | one 低延迟
+        send_timeout_ms: 5000       # 0 = 默认 5000
+        max_message_bytes: 1048576  # 必填 [1KB,100MB]，且 ≤ broker max.message.bytes
+        sasl: { enabled: false, mechanism: "", user: "", password_env: "" }
+        tls: { enabled: false, skip_verify: false, ca: "", cert: "", key: "" }
+      rocketmq:
+        enabled: false              # false 时不校验、不连接
+        name_servers: ["10.0.3.1:9876"]
+        group: gocdc-producer
+        topic_prefix: "CDC_"
+        order_by: row
+        send_timeout_ms: 5000
+        send_concurrency: 32        # 0 = 默认 32；组间并发发送上限（组内仍严格串行）
+        acl: { access_key: "", secret_key: "${ROCKETMQ_SECRET}" }
+    # ── 规则：组形态白名单——哪个库的哪些表写到哪些下游（详见 §6）──
+    rules:
+      - schema: edu.mall.admin      # 一组一库
+        ddl_policy: auto            # 组级：auto | pause | ignore；省略 = pause
+        sinks: { mysql: true, kafka: true }
+        tables:                     # 白名单：未列入的表（含未来新表）不同步
+          - { table: admin_user, order_by_column: id, do_stock: true,
+              mask_columns: { phone: phone } }
+          - { table: subjects,   order_by_column: id, do_stock: true }
+          - { table: tmp_log,    order_by_column: id, do_stock: false }  # 只增量不快照
 
 # ── 可观测：端口与日志 ──
 observability:

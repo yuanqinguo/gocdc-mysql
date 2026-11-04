@@ -89,19 +89,19 @@ profile cluster：gocdc-2 热备（选主演示覆盖全部源）
 ### 4.3 edu-mall-dev 演进
 
 现部署单源 7 库聚合（`deploy/config.edu-mall-dev.yml`）升级路径：
-配置原样（v1 自动包装 default）→ 行为不变；未来源拆多实例时改写为
-`sources[]` 多源即可，目标库与聚合表不变（V4 校验保证新源不与
-default 源撞目标表）。
+正文一步改写（包 `sources[id=default]`，RUNBOOK §9.4）→ 行为不变；未来
+源拆多实例时改写为 `sources[]` 多源即可，目标库与聚合表不变（V4 校验
+保证新源不与 default 源撞目标表）。
 
 ## 5. RUNBOOK 增补条目（docs/RUNBOOK.md）
 
 | 条目 | 内容 |
 |------|------|
-| 多源配置变更 | 改 etcd `/gocdc/{cluster}/config`（v2 YAML）→ 滚动重启生效（不热更，现行口径）；新增源 = 配置加一项 + 重启（新源首启自动全量，其余源照常） |
+| 多源配置变更 | 改 etcd 配置键（默认 `/config/edu.mall.gocdc/system`，多集群共享 etcd 时显式区分）（v2 YAML）→ 滚动重启生效（不热更，现行口径）；新增源 = 配置加一项 + 重启（新源首启自动全量，其余源照常） |
 | 单源故障处置 | `/status` 或 `gocdc_source_up` 定位源 → 单源视图按现行单集群 runbook 处置（DDL 审批/暂停恢复/位点回拨/restock），操作路由带 `/sources/{sid}` |
 | 某源源库主从切换 | 现行 §4 流程逐源执行：GTID 模式自动续传；file:pos 停该源（其他源不停——整进程重启仍会全部源切换窗口，如需绝对隔离见多 cluster 形态） |
 | etcd 键迁移回滚 | PRD 04 §4.3 的三步手工搬回流程 |
-| 升级检查单 | ① 新二进制 + 现行 v1 配置启动一次（自动迁移完成日志 `etcd_keys_migrated`）② 指标出现 `source="default"` label（告警查询同步更新）③ Web 顶栏出现源选择器 |
+| 升级检查单 | ① 正文包 `sources[id=default]`（顶层旧形态已拒）② 新二进制启动一次（自动迁移完成日志 `etcd_keys_migrated`）③ 指标出现 `source="default"` label（告警查询同步更新）④ Web 顶栏出现源选择器 |
 | 容量规划 | 连接数预算表（PRD 05 §5.2）+ GOMEMLIMIT 建议值 |
 
 ## 6. verify 对账

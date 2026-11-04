@@ -19,8 +19,8 @@ import (
 // validConfig 返回一份合法基线配置（v2 单源形态），各用例按需变异。
 func validConfig() Config {
 	return Config{
-		Cluster: "c1",
-		HA:      HA{LeaseTTLSeconds: 10, LeaderCheckIntervalMS: 2000},
+		Cluster:  "c1",
+		HA:       HA{LeaseTTLSeconds: 10, LeaderCheckIntervalMS: 2000},
 		Pipeline: Pipeline{Workers: 4, WorkerQueueSize: 8192, BatchSize: 500, FlushIntervalMS: 200, PositionSaveIntervalMS: 3000},
 		Sources: []SourceSpec{{
 			ID: DefaultSourceID,
@@ -471,31 +471,33 @@ func (f *fakeLoadKV) Txn(context.Context) clientv3.Txn { return nil }
 func TestLoad_FromFile(t *testing.T) {
 	t.Setenv("GOCDC_TEST_SRC_PW", "srcpw")
 	raw := `cluster: c1
-source:
-  addr: "10.0.0.1:3306"
-  user: repl
-  password: "${GOCDC_TEST_SRC_PW}"
-  charset: utf8mb4
-  flavor: mysql
-  server_id: 1
-  timezone: Asia/Shanghai
-  exclude_schemas: [mysql, sys, information_schema, performance_schema]
 ha: { lease_ttl_seconds: 10 }
 pipeline: { workers: 4, worker_queue_size: 8192, batch_size: 500 }
-targets:
-  mysql:
-    enabled: true
-    addr: "10.0.1.1:3306"
-    user: w
-    password: x
-    charset: utf8mb4
-    max_open_conns: 20
-    tx_chunk_rows: 500
-rules:
-  - schema: db1
-    sinks: { mysql: true }
-    tables:
-      - { table: t1, order_by_column: id, do_stock: true }
+sources:
+  - id: main
+    source:
+      addr: "10.0.0.1:3306"
+      user: repl
+      password: "${GOCDC_TEST_SRC_PW}"
+      charset: utf8mb4
+      flavor: mysql
+      server_id: 1
+      timezone: Asia/Shanghai
+      exclude_schemas: [mysql, sys, information_schema, performance_schema]
+    targets:
+      mysql:
+        enabled: true
+        addr: "10.0.1.1:3306"
+        user: w
+        password: x
+        charset: utf8mb4
+        max_open_conns: 20
+        tx_chunk_rows: 500
+    rules:
+      - schema: db1
+        sinks: { mysql: true }
+        tables:
+          - { table: t1, order_by_column: id, do_stock: true }
 observability:
   web: { enabled: true, addr: ":8060", username: admin, password: t }
   metrics_addr: ":9595"
@@ -536,31 +538,33 @@ observability:
 func TestLoad_YAMLFormat(t *testing.T) {
 	t.Setenv("GOCDC_TEST_SRC_PW", "srcpw")
 	raw := `cluster: c1
-source:
-  addr: "10.0.0.1:3306"
-  user: repl
-  password: "${GOCDC_TEST_SRC_PW}"
-  charset: utf8mb4
-  flavor: mysql
-  server_id: 1
-  timezone: Asia/Shanghai
-  exclude_schemas: [mysql, sys, information_schema, performance_schema]
 ha: { lease_ttl_seconds: 10 }
 pipeline: { workers: 4, worker_queue_size: 8192, batch_size: 500 }
-targets:
-  mysql:
-    enabled: true
-    addr: "10.0.1.1:3306"
-    user: w
-    password: x
-    charset: utf8mb4
-    max_open_conns: 20
-    tx_chunk_rows: 500
-rules:
-  - schema: db1
-    sinks: { mysql: true }
-    tables:
-      - { table: t1, order_by_column: id, do_stock: true }
+sources:
+  - id: main
+    source:
+      addr: "10.0.0.1:3306"
+      user: repl
+      password: "${GOCDC_TEST_SRC_PW}"
+      charset: utf8mb4
+      flavor: mysql
+      server_id: 1
+      timezone: Asia/Shanghai
+      exclude_schemas: [mysql, sys, information_schema, performance_schema]
+    targets:
+      mysql:
+        enabled: true
+        addr: "10.0.1.1:3306"
+        user: w
+        password: x
+        charset: utf8mb4
+        max_open_conns: 20
+        tx_chunk_rows: 500
+    rules:
+      - schema: db1
+        sinks: { mysql: true }
+        tables:
+          - { table: t1, order_by_column: id, do_stock: true }
 observability:
   metrics_addr: ":9595"
   log: { level: info }

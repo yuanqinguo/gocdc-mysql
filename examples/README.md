@@ -1,10 +1,13 @@
-# examples · 三形态示例配置
+# examples · 三部署形态示例（配置统一 `sources[]`）
 
-| 文件 | 形态 | 要点 |
+配置面只有一种结构：`sources[]`（单源=数组一条；顶层 `source/targets/rules`
+旧形态已移除，加载即报错）。三份示例的差别只在部署形态：
+
+| 文件 | 部署形态 | 要点 |
 |------|------|------|
 | `single.yml` | 单节点 | `ha.enabled: false`——无选举，进程直接 leader；位点仍走 etcd 租约门槛 |
 | `cluster.yml` | HA 集群 | `ha.enabled: true`——同配置多副本，etcd 选举唯一 leader，standby 热备接管 |
-| `multi-source.yml` | 多源 | `sources[]`——单进程双源（src-a/src-b）聚合写入同一目标库，V4 校验保证目标不相交 |
+| `multi-source.yml` | 多源 | 双源（src-a/src-b）聚合写入同一目标库，V4 校验保证目标不相交 |
 
 三份均为 `config_version: 2` 完整字段（不留默认省略），字段全集见
 `internal/config/README.md`；校验规则见 `docs/prd/03-config-schema.md`。

@@ -303,6 +303,64 @@ func TestRouter_PutRules_Rejections(t *testing.T) {
 	}
 }
 
+// TestRouter_ConfigEdit_V1Body 配置中心正文为 v1 顶层形态（已移除的形态——
+// 外部 etcdctl 写回旧正文 / 升级未改写正文）时：raw 照常透传，GET/PUT rules
+// 500 且错误详情直达 UI（含 v1 形态指引），绝不写入。2026-11 移除自动包装后
+// 编辑链路对新形态的唯一合法输入是 sources[] 正文。
+func TestRouter_ConfigEdit_V1Body(t *testing.T) {
+	t.Setenv("PW", "x")
+	deps, store, _, _ := editDeps(t)
+	store.raw = `cluster: c1
+ha: { lease_ttl_seconds: 10 }
+observability: { metrics_addr: ":9595", log: { level: info } }
+source:
+  addr: "s:3306"
+  user: root
+  password: ${PW}
+  charset: utf8mb4
+  flavor: mysql
+  timezone: UTC
+  exclude_schemas: [mysql, sys, information_schema, performance_schema]
+targets:
+  mysql:
+    enabled: true
+    addr: "d:3306"
+    user: root
+    password: ${PW}
+    charset: utf8mb4
+    max_open_conns: 5
+    tx_chunk_rows: 100
+rules:
+  - schema: db1
+    sinks: {mysql: true}
+    tables:
+      - {table: t1, order_by_column: id, do_stock: true}
+`
+	r := NewRouter(deps, AuthConfig{Username: "admin", Password: "pw"})
+
+	// raw 端点不解析正文 → 照常 200（运维可用它看正文内容诊断）
+	w := cfgRawDo(r, "GET", "/api/v1/config/raw", "")
+	if w.Code != 200 {
+		t.Fatalf("v1 正文 raw 应照常 200: %d %s", w.Code, w.Body.String())
+	}
+	// GET rules → 500 带形态指引（不是笼统的「无法解析」）
+	w = cfgRawDo(r, "GET", "/api/v1/sources/default/rules", "")
+	if w.Code != 500 || !contains(w.Body.String(), "v1 单源形态已移除") || !contains(w.Body.String(), "sources") {
+		t.Fatalf("v1 正文 GET rules 应 500 带指引: %d %s", w.Code, w.Body.String())
+	}
+	// PUT rules（confirm+base 齐备）→ 500 带指引，绝不写
+	w = putRulesReq(deps, "/api/v1/sources/default/rules?confirm=true&base=100", rulesPayload)
+	if w.Code != 500 || !contains(w.Body.String(), "v1 单源形态已移除") {
+		t.Fatalf("v1 正文 PUT rules 应 500 带指引: %d %s", w.Code, w.Body.String())
+	}
+	if store.writes != 0 {
+		t.Fatalf("v1 正文 PUT 绝不应写: %d", store.writes)
+	}
+	if contains(store.raw, "t2") {
+		t.Fatalf("v1 正文被意外改写:\n%s", store.raw)
+	}
+}
+
 // TestRouter_PutRules_CheckOnly 预演：免 confirm、不写、报告照常返回。
 func TestRouter_PutRules_CheckOnly(t *testing.T) {
 	t.Setenv("PW", "x")

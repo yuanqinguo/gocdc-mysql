@@ -80,6 +80,7 @@ bootstrap:
   config_source: etcd
   config_center:
     etcd_addrs: [127.0.0.1:12380]
+    key: /gocdc/$cluster/config
   etcd_addrs:
     - 127.0.0.1:12379
 EOF
@@ -98,7 +99,7 @@ flag_start(){
   rm -rf "$d"; mkdir -p "$d"
   cp "$BIN" "$d/gocdcbin"
   (cd "$d" && env WEB_PASSWORD=demo123 METRICS_ADDR=$met WEB_ADDR=$web "$@" \
-     setsid nohup ./gocdcbin -cluster "$cluster" -etcd 127.0.0.1:12379 9>&- > /tmp/v2/$name.log 2>&1 &)
+     setsid nohup ./gocdcbin -cluster "$cluster" -etcd 127.0.0.1:12379 -config-key "/gocdc/$cluster/config" 9>&- > /tmp/v2/$name.log 2>&1 &)
   echo "  [start-B] $name cluster=$cluster（纯 flag，配置中心=协调面 12379）"
 }
 

@@ -45,9 +45,9 @@
   gocdc -cluster <name> -etcd <addrs> [-config-key <path>] [-config-file <yml>]   # 显式 flag 形态
 ```
 
-**启动裁决（config.ResolveStartup）**：优先级 **flag > 引导文件 > 报错**。引导文件同一文件两种形态（`bootstrap.config_source` 区分）：`file`（默认）= 文件即全量配置（开发）；`etcd` = 引导桩，全量配置从配置中心拉取。**两个 etcd 角色可分离**：配置中心（`bootstrap.config_center.etcd_addrs`，一个 etcd 按 `/gocdc/{cluster}/config` 前缀隔离多环境）与协调面（位点/选举，`bootstrap.etcd_addrs`，缺省回退配置中心）不必是同一实例。
+**启动裁决（config.ResolveStartup）**：优先级 **flag > 环境变量（仅 etcd：`ETCD_HOSTS`）> 引导文件 > 终极默认 > 报错**（cluster 终极默认 `gocdc-mysql`；配置键终极默认 `/config/edu.mall.gocdc/system`）。引导文件同一文件两种形态（`bootstrap.config_source` 区分）：`file`（默认）= 文件即全量配置（开发）；`etcd` = 引导桩，全量配置从配置中心拉取。**两个 etcd 角色可分离**：配置中心（`bootstrap.config_center.etcd_addrs` + 可选 `key`；默认公司约定固定键，多集群/多环境显式给 `key` 区分）与协调面（位点/选举，`bootstrap.etcd_addrs`，前缀 `/gocdc/{cluster}/`，缺省回退配置中心）不必是同一实例。
 
-**先有鸡先有蛋的裁决（实现必须遵守）**：启动裁决后的 `cluster` 值（flag 覆盖 > 引导文件顶层 `cluster` 字段）是 etcd key 前缀（`/gocdc/{cluster}/config`）的**唯一来源**；加载到的配置体内的 `cluster` 字段**必须与裁决值相等**，不等即 fail-fast 报「配置属于别的集群」——配置字段只是冗余校验，绝不参与 key 推导。
+**先有鸡先有蛋的裁决（实现必须遵守）**：启动裁决后的 `cluster` 值（flag 覆盖 > 引导文件顶层 `cluster` 字段 > 终极默认 `gocdc-mysql`）是**协调面** etcd key 前缀（`/gocdc/{cluster}/`——位点/选举）的**唯一来源**；**配置中心** key 独立裁决（flag `-config-key` > 引导桩 `config_center.key` > 终极默认 `/config/edu.mall.gocdc/system`，不随集群变）。加载到的配置体内的 `cluster` 字段**必须与裁决值相等**，不等即 fail-fast 报「配置属于别的集群」——配置字段只是冗余校验，绝不参与 key 推导。
 
 1. 优先级：启动裁决 → `file` 形态读引导文件本体（跳过 etcd 配置源）→ `etcd` 形态/纯 flag 读配置中心 `config` key。
 2. 配置读取失败或 key 不存在 → **启动失败退出**（fail-fast，绝不带着空/旧配置运行）。
@@ -63,27 +63,12 @@ node:                              # 节点身份（选举/注册/Web 展示用�
   id: ""                           # 空 = 自动派生 "{hostname}-{8位随机}"，多副本 k8s 也可用 POD_NAME 注入
   advertise_addr: ""               # 空 = 自动 "本机IP:web端口"；供集群页面定位节点
 
-source:
-  addr: "10.0.0.1:3306"
-  user: repl
-  password: "***"
-  charset: utf8mb4
-  flavor: mysql                    # mysql | mariadb
-  server_id: 123456                # 可省略：缺省按 node.id 派生（fnv32）；显式则须全网唯一
-  timezone: Asia/Shanghai          # DATETIME 解释时区（显式声明，不依赖进程 Local）
-  use_gtid: false                  # true 时位点含 gtid_set
-  heartbeat_interval_ms: 3000      # binlog 心跳（保活 + 空转探活）
-  read_timeout_ms: 60000
-  exclude_schemas: [mysql, sys, information_schema, performance_schema]
-                                   # 系统库硬排除（配置可追加，不可移除这四个）
-  tls: { enabled: false, skip_verify: false, ca: "", cert: "", key: "" }
-
 ha:
   lease_ttl_seconds: 10            # 选举 lease
   leader_check_interval_ms: 2000   # leader 在位复核周期
   resign_on_shutdown: true         # 优雅停机时主动让位
 
-pipeline:
+pipeline:                          # 集群级默认模板（源级同名段逐项覆盖）
   workers: 4                       # 解析/发送并行度（按表分片）
   worker_queue_size: 8192          # 每 worker 有界队列（事件数）
   batch_size: 500                  # 攒批条数
@@ -93,52 +78,66 @@ pipeline:
   decimal_as: string               # DECIMAL 承载（04 §7）：string|float
   zero_datetime_as: "null"         # 零日期策略（04 §7）：null|string
 
-targets:
-  mysql:
-    enabled: true
-    addr: "10.0.1.1:3306"
-    user: writer
-    password: "***"
-    charset: utf8mb4
-    max_open_conns: 20             # 显式必填（0 = 无上限，防连接失控）
-    max_idle_conns: 5
-    conn_max_lifetime_min: 30
-    tx_chunk_rows: 500             # 单事务最大行数
-    target_database: edu_merge     # 默认目标库（05 §5.1.1）；空 = 与源库同名
-    ddl_sync: true                 # 允许 auto 策略同步白名单 DDL 到目标
-  kafka:
-    enabled: true
-    brokers: ["10.0.2.1:9092"]
-    topic_prefix: "cdc_"           # 实际 topic = prefix + db_table（Kafka/RocketMQ 统一规范，点号不收；或按 rule 覆盖）
-    order_by: row                  # row: key=pk（同行有序）| table: key=db.table（表级有序）
-    compression: snappy
-    idempotent_producer: true
-    ack: all
-    send_timeout_ms: 5000
-    max_message_bytes: 1048576     # 客户端侧消息上限，须 ≤ broker/topic max.message.bytes
-    sasl: { enabled: false, mechanism: "", user: "", password_env: "" }
-    tls: { enabled: false, skip_verify: false, ca: "", cert: "", key: "" }
-  rocketmq:
-    enabled: false
-    name_servers: ["10.0.3.1:9876"]
-    group: gocdc-producer
-    topic_prefix: "CDC_"
-    order_by: row                  # 顺序消息 selector 按 key 哈希
-    send_timeout_ms: 5000
-    acl: { access_key: "", secret_key: "" }
-
-rules:
-  # 组形态白名单（唯一形态）：一组一库；未列入 tables 的表（含未来新表）不同步
-  - schema: edu.mall.admin
-    ddl_policy: auto               # auto | pause | ignore（见 08）；省略 = pause（安全默认）
-    sinks: { mysql: true, kafka: true }
+sources:                           # 统一 sources[]：单源=数组一条；多源追加条目
+  - id: main                       # 源标识（位点子树/指标 label/API 路径共用）
+    source:
+      addr: "10.0.0.1:3306"
+      user: repl
+      password: "***"
+      charset: utf8mb4
+      flavor: mysql                # mysql | mariadb
+      server_id: 123456            # 可省略：缺省按 node.id:sid 派生（fnv32）；显式则须全网唯一
+      timezone: Asia/Shanghai      # DATETIME 解释时区（显式声明，不依赖进程 Local）
+      use_gtid: false              # true 时位点含 gtid_set
+      heartbeat_interval_ms: 3000  # binlog 心跳（保活 + 空转探活）
+      read_timeout_ms: 60000
+      exclude_schemas: [mysql, sys, information_schema, performance_schema]
+                                   # 系统库硬排除（配置可追加，不可移除这四个）
+      tls: { enabled: false, skip_verify: false, ca: "", cert: "", key: "" }
+    targets:                       # 每源独立下游（独立连接池/生产者）
+      mysql:
+        enabled: true
+        addr: "10.0.1.1:3306"
+        user: writer
+        password: "***"
+        charset: utf8mb4
+        max_open_conns: 20         # 显式必填（0 = 无上限，防连接失控）
+        max_idle_conns: 5
+        conn_max_lifetime_min: 30
+        tx_chunk_rows: 500         # 单事务最大行数
+        target_database: edu_merge # 默认目标库（05 §5.1.1）；空 = 与源库同名
+        ddl_sync: true             # 允许 auto 策略同步白名单 DDL 到目标
+      kafka:
+        enabled: true
+        brokers: ["10.0.2.1:9092"]
+        topic_prefix: "cdc_"       # 实际 topic = prefix + db_table（Kafka/RocketMQ 统一规范，点号不收；或按 rule 覆盖）
+        order_by: row              # row: key=pk（同行有序）| table: key=db.table（表级有序）
+        compression: snappy
+        idempotent_producer: true
+        ack: all
+        send_timeout_ms: 5000
+        max_message_bytes: 1048576 # 客户端侧消息上限，须 ≤ broker/topic max.message.bytes
+        sasl: { enabled: false, mechanism: "", user: "", password_env: "" }
+        tls: { enabled: false, skip_verify: false, ca: "", cert: "", key: "" }
+      rocketmq:
+        enabled: false
+        name_servers: ["10.0.3.1:9876"]
+        group: gocdc-producer
+        topic_prefix: "CDC_"
+        order_by: row              # 顺序消息 selector 按 key 哈希
+        send_timeout_ms: 5000
+        acl: { access_key: "", secret_key: "" }
+    rules:
+      # 组形态白名单（唯一形态）：一组一库；未列入 tables 的表（含未来新表）不同步
+      - schema: edu.mall.admin
+        ddl_policy: auto           # auto | pause | ignore（见 08）；省略 = pause（安全默认）
+        sinks: { mysql: true, kafka: true }
                                    # bool 简写；需覆盖 topic/tag 时写对象：
                                    # kafka: {enabled: true, topic: "cdc.custom"}；MySQL sink 配 topic/tag 拒绝
-    tables:
-      - { table: admin_user, order_by_column: id, do_stock: true,
-          mask_columns: { phone: phone } }   # 全量快照排序键见 06 §4；do_stock 表级必填
-      - { table: tmp_log, order_by_column: id, do_stock: false }  # 只增量不快照
-      remark: { type: truncate, keep: 32 }
+        tables:
+          - { table: admin_user, order_by_column: id, do_stock: true,
+              mask_columns: { phone: { type: truncate, keep: 32 } } }   # 快照排序键见 06 §4；do_stock 表级必填
+          - { table: tmp_log, order_by_column: id, do_stock: false }  # 只增量不快照
 
 observability:
   web: { enabled: true, addr: ":8060", username: admin, password: "***" }
@@ -243,10 +242,10 @@ follower 侧：
 单进程多源（`sources[]`，2026-11 落地）对本文的两处增量——完整设计见
 `docs/prd/`（多源 PRD 01~08），此处只记与本文契约的衔接：
 
-- **配置结构 v2**：顶层 `source/targets/rules` 下沉为 `sources[]` 数组元素；
+- **配置结构 v2**：`source/targets/rules` 一律写在 `sources[]` 数组元素内
+  （2026-11 起为唯一形态——顶层旧形态已移除，命中即报错，不再自动包装）；
   顶层 `pipeline/stock` 为集群级默认模板（源级同名段逐项覆盖，0 值=未设）。
-  v1 配置加载后自动包装为 `sources:[{id:"default"}]`——下游只见 v2 结构，
-  v1 不是平行代码路径。校验新增 V1~V6（源数 1..64 / id 规则 / 逐源现行校验 /
+  校验含 V1~V6（源数 1..64 / id 规则 / 逐源现行校验 /
   跨源目标不相交 / 同实例 server_id / 合并值范围）。
 - **键空间 v2**：源私有状态下沉一层
   `/gocdc/{cluster}/sources/{sid}/{position|stock/*|pipeline-pause|events/ddl/*}`；

@@ -152,9 +152,9 @@ func TestSpliceSourceRules_V2_Preserves(t *testing.T) {
 	}
 }
 
-// TestSpliceSourceRules_V1_TopLevel v1 顶层形态（真实生产正文形态）：
-// default 源替换顶层 rules；其他 sid 报错。
-func TestSpliceSourceRules_V1_TopLevel(t *testing.T) {
+// TestSpliceSourceRules_V1Rejected v1 顶层形态已移除：splice 与加载链均报错
+// 并给 sources[] 改写指引（不再自动包装/替换顶层 rules）。
+func TestSpliceSourceRules_V1Rejected(t *testing.T) {
 	t.Setenv("PW", "x")
 	v1 := `# v1 注释
 cluster: c1
@@ -196,18 +196,12 @@ rules:
 		Tables: []TableRule{{Table: "t1", OrderByColumn: "id", DoStock: doStockPtr(true)},
 			{Table: "t2", DoStock: doStockPtr(false)}},
 	}}
-	out, err := SpliceSourceRules([]byte(v1), DefaultSourceID, newRules)
-	if err != nil {
-		t.Fatalf("v1 splice: %v", err)
+	_, err := SpliceSourceRules([]byte(v1), DefaultSourceID, newRules)
+	if err == nil || !strings.Contains(err.Error(), "形态已移除") {
+		t.Fatalf("v1 正文 splice 应报形态移除错误: %v", err)
 	}
-	if !strings.Contains(string(out), "t2") || !strings.Contains(string(out), "# v1 注释") {
-		t.Fatalf("v1 替换结果不符:\n%s", out)
-	}
-	if res := LoadFromRaw(out, "c1"); len(res.Errors) > 0 {
-		t.Fatalf("v1 替换后校验失败: %v\n%s", res.Errors, out)
-	}
-	if _, err := SpliceSourceRules([]byte(v1), "other", newRules); err == nil {
-		t.Fatalf("v1 非 default 源应报错")
+	if res := LoadFromRaw([]byte(v1), "c1"); !containsErr(res.Errors, "v1 单源形态已移除") {
+		t.Fatalf("v1 正文加载链应报形态移除错误: %v", res.Errors)
 	}
 }
 

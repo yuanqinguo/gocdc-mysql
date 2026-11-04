@@ -96,26 +96,28 @@ func TestRule_LegacyFlatFormRejected(t *testing.T) {
 		return p
 	}
 	head := `cluster: c1
-source:
-  addr: "10.0.0.1:3306"
-  user: repl
-  password: pwd
-  charset: utf8mb4
-  flavor: mysql
-  server_id: 1
-  timezone: Asia/Shanghai
-  exclude_schemas: [mysql, sys, information_schema, performance_schema]
 ha: { lease_ttl_seconds: 10 }
 pipeline: { workers: 4, worker_queue_size: 8192, batch_size: 500, flush_interval_ms: 200, position_save_interval_ms: 3000 }
-targets:
-  mysql:
-    enabled: true
-    addr: "10.0.1.1:3306"
-    user: w
-    password: pwd
-    charset: utf8mb4
-    max_open_conns: 20
-    tx_chunk_rows: 500
+sources:
+  - id: main
+    source:
+      addr: "10.0.0.1:3306"
+      user: repl
+      password: pwd
+      charset: utf8mb4
+      flavor: mysql
+      server_id: 1
+      timezone: Asia/Shanghai
+      exclude_schemas: [mysql, sys, information_schema, performance_schema]
+    targets:
+      mysql:
+        enabled: true
+        addr: "10.0.1.1:3306"
+        user: w
+        password: pwd
+        charset: utf8mb4
+        max_open_conns: 20
+        tx_chunk_rows: 500
 `
 	cases := []struct {
 		name    string
@@ -123,18 +125,18 @@ targets:
 		contain string
 	}{
 		{"库级平铺", `
-rules:
-  - schema: db1
-    do_stock: true
-    order_by_column: id
-    sinks: { mysql: true }
+    rules:
+      - schema: db1
+        do_stock: true
+        order_by_column: id
+        sinks: { mysql: true }
 `, "不支持的规则组形态"},
 		{"表级 sinks", `
-rules:
-  - schema: db1
-    sinks: { mysql: true }
-    tables:
-      - { table: t1, do_stock: true, sinks: { mysql: true } }
+    rules:
+      - schema: db1
+        sinks: { mysql: true }
+        tables:
+          - { table: t1, do_stock: true, sinks: { mysql: true } }
 `, "表级条目不识别"},
 	}
 	for _, tc := range cases {
@@ -159,37 +161,39 @@ rules:
 func TestLoad_GroupRulesYAML(t *testing.T) {
 	yml := `
 cluster: c1
-source:
-  addr: "10.0.0.1:3306"
-  user: repl
-  password: pwd
-  charset: utf8mb4
-  flavor: mysql
-  server_id: 123
-  timezone: Asia/Shanghai
-  exclude_schemas: [mysql, sys, information_schema, performance_schema]
 ha: { lease_ttl_seconds: 10 }
 pipeline: { workers: 4, worker_queue_size: 8192, batch_size: 500, flush_interval_ms: 200, position_save_interval_ms: 3000 }
-targets:
-  mysql:
-    enabled: true
-    addr: "10.0.1.1:3306"
-    user: writer
-    password: pwd
-    charset: utf8mb4
-    max_open_conns: 20
-    tx_chunk_rows: 500
-rules:
-  - schema: dev_edu.mall.admin
-    sinks: { mysql: true }
-    ddl_policy: auto
-    tables:
-      - { table: admin_user, order_by_column: id, do_stock: true }
-      - table: users
-        order_by_column: id
-        do_stock: false
-        mask_columns:
-          phone: phone
+sources:
+  - id: main
+    source:
+      addr: "10.0.0.1:3306"
+      user: repl
+      password: pwd
+      charset: utf8mb4
+      flavor: mysql
+      server_id: 123
+      timezone: Asia/Shanghai
+      exclude_schemas: [mysql, sys, information_schema, performance_schema]
+    targets:
+      mysql:
+        enabled: true
+        addr: "10.0.1.1:3306"
+        user: writer
+        password: pwd
+        charset: utf8mb4
+        max_open_conns: 20
+        tx_chunk_rows: 500
+    rules:
+      - schema: dev_edu.mall.admin
+        sinks: { mysql: true }
+        ddl_policy: auto
+        tables:
+          - { table: admin_user, order_by_column: id, do_stock: true }
+          - table: users
+            order_by_column: id
+            do_stock: false
+            mask_columns:
+              phone: phone
 observability:
   metrics_addr: ":9595"
   web: { enabled: false }

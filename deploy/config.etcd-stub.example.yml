@@ -1,6 +1,8 @@
 # 生产形态引导桩示例（config_source: etcd）：
-# 本文件只做启动引导，全量配置存配置中心 etcd（/gocdc/{cluster}/config）——
-# 一个配置中心按集群前缀隔离多环境，改配置 = etcdctl put 对应 key 后重启。
+# 本文件只做启动引导，全量配置存配置中心 etcd——改配置 = etcdctl put 对应 key
+# 后重启。配置键默认 = 公司约定固定键 /config/edu.mall.gocdc/system；
+# 多集群共享同一配置中心 etcd 时，各集群显式给 key（如 /gocdc/{cluster}/config）
+# 做隔离——集群名只决定协调面前缀 /gocdc/{cluster}，不再决定配置键。
 # 用法：放到工作目录改名 config.local.yml（零参数启动），或 -config-file 指定。
 #
 # 协调面（位点/选举）与配置中心允许是不同 etcd 实例：
@@ -12,4 +14,5 @@ bootstrap:
   etcd_addrs: ["10.0.5.11:2379", "10.0.5.12:2379"]   # 协调面（位点/选举）——可与配置中心不同实例
   config_center:
     etcd_addrs: ["cfg.etcd.internal:2379"]           # 配置中心
-    # key: "/gocdc/edu-merge-prod/config"            # 缺省即此值，一般不用填
+    # key 缺省 = /config/edu.mall.gocdc/system（公司约定固定键）
+    # key: "/gocdc/edu-merge-prod/config"            # 多集群共享 etcd 时显式区分

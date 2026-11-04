@@ -34,8 +34,8 @@ etcd 键段 `sources/{sid}`、API 路由段 `/sources/{sid}`、指标 label 与
 单源假设的根在 `Config.Source` 单数结构（config.go:22），修叶子不修根
 只会把单源假设摊薄成更多隐式约定。配置 v2 把 `source/targets/rules`
 下沉到数组元素，`pipeline/stock` 支持 cluster 级默认 + 源级覆盖。
-v1 配置在加载后自动包装为 `sources: [{id: "default", ...}]`，行为零变化
-（[03 §4](03-config-schema.md)）。
+v1 顶层形态已移除（2026-11 用户决策）：配置面统一 `sources[]`，单源即
+数组一条，顶层旧字段命中即报错并指引改写（[03 §4](03-config-schema.md)）。
 
 **被否方案**：用多个 cluster 前缀在单进程内模拟多源（进程内跑 N 套
 coordination）。否决理由：N 套选主/N 个 Web 端口/N 份 metrics server，
@@ -69,11 +69,12 @@ stock/*、events/ddl/*）；cluster 共性状态（config、leader、election/�
 nodes/、events/audit）保持原位。键空间全图与迁移协议见
 [04](04-etcd-ha.md)。
 
-### D4 · 存量平滑升级：v1 配置自动包装 + etcd 键一次性自动迁移
+### D4 · 存量平滑升级：正文一步改写 + etcd 键一次性自动迁移
 
-- 配置：v1 YAML（顶层 `source/targets/rules`）加载后规范化为单源
-  `default`，校验、装配、API 全走 v2 路径——单源部署升级二进制即完成
-  多源化准备，不需要先改配置。
+- 配置：v1 YAML（顶层 `source/targets/rules`）升级时人工包一层
+  `sources: [{id: "default", ...}]`（2026-11 起加载链不再自动包装，顶层
+  旧形态报错拒绝）；id 必须填 `default` 与键迁移落点对齐，校验、装配、
+  API 全走 v2 路径。
 - 键迁移：进程启动装配期执行「legacy key → `sources/default/`」的 CAS
   搬家（目标不存在才写，成功后删旧键），幂等、并发安全、记审计；
   迁移与回滚细则见 [04 §4](04-etcd-ha.md)。

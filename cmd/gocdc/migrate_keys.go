@@ -1,6 +1,7 @@
 // etcd 键空间 v1→v2 一次性迁移（多源 PRD 04 §4）：
 // 升级后的进程首次启动装配期执行「legacy key → sources/default/」的搬家
-//（配置已先行规范化为 v1→sources[default]，迁移目标源 id 恒为 default）。
+//（迁移目标源 id 恒为 default——升级正文 sources 的 id 须填 default 与
+// 此对齐，见 RUNBOOK §9.4；配置正文的 v1 自动包装已于 2026-11 移除）。
 //
 // 算法（幂等 + 并发安全）：对每个键执行
 //

@@ -86,33 +86,35 @@ docker compose up -d        # 起 etcd + 源库 + 目标库 + gocdc 单节点
 
 ```yaml
 cluster: prod
-source:
-  addr: "10.0.0.1:3306"
-  user: repl
-  password: ${SRC_PWD}
-  charset: utf8mb4
-  flavor: mysql
-  server_id: 99001
-  timezone: Asia/Shanghai
-  exclude_schemas: [mysql, sys, information_schema, performance_schema]
 node: { id: node1, advertise_addr: "" }
 ha: { lease_ttl_seconds: 10, leader_check_interval_ms: 2000, resign_on_shutdown: true }
 pipeline: { workers: 4, worker_queue_size: 8192, batch_size: 500, flush_interval_ms: 200, position_save_interval_ms: 3000 }
-targets:
-  mysql:
-    enabled: true
-    addr: "10.0.0.2:3306"
-    user: gocdc
-    password: ${DST_PWD}
-    charset: utf8mb4
-    max_open_conns: 20
-    tx_chunk_rows: 500
-    ddl_sync: true
-rules:
-  - schema: order_db
-    order_by_column: id
-    do_stock: true
-    sinks: { mysql: true }
+sources:                          # 统一 sources[]：单源=数组一条
+  - id: main
+    source:
+      addr: "10.0.0.1:3306"
+      user: repl
+      password: ${SRC_PWD}
+      charset: utf8mb4
+      flavor: mysql
+      server_id: 99001
+      timezone: Asia/Shanghai
+      exclude_schemas: [mysql, sys, information_schema, performance_schema]
+    targets:
+      mysql:
+        enabled: true
+        addr: "10.0.0.2:3306"
+        user: gocdc
+        password: ${DST_PWD}
+        charset: utf8mb4
+        max_open_conns: 20
+        tx_chunk_rows: 500
+        ddl_sync: true
+    rules:                        # 组形态白名单：组级统一，表清单逐表列出
+      - schema: order_db
+        sinks: { mysql: true }
+        tables:
+          - { table: orders, order_by_column: id, do_stock: true }
 observability:
   metrics_addr: ":9595"
   web:
@@ -406,7 +408,7 @@ curl http://127.0.0.1:9595/metrics                            # Prometheus 指�
 4. **复制账号最小授权**：SELECT + REPLICATION SLAVE + REPLICATION CLIENT + RELOAD/BACKUP_ADMIN；不给 SUPER。
 5. **密码全走 `${ENV}`**：配置文件/etcd 里无明文；`auth_disabled` 只允许纯内网且显式声明。
 6. **集群 ≥2 节点 + etcd 3 节点**：etcd 是协调面单点，quorum 丢失=全停（安全态）。
-7. **配置进 etcd**：`/gocdc/{cluster}/config`，改配置滚动重启（不热更）。
+7. **配置进 etcd**：默认键 `/config/edu.mall.gocdc/system`（多集群共享 etcd 时以引导桩 `config_center.key` 或 `-config-key` 显式区分，如 `/gocdc/{cluster}/config`），改配置滚动重启（不热更）。
 8. **RocketMQ topic 预建+FIFO**；Kafka `max_message_bytes` ≤ broker 限制。
 9. **ddl_sync 谨慎开**：auto 策略只自动执行白名单（加列/扩容/注释/CREATE）；DROP 类任何策略都要人工。
 10. **验证/对账常态化**：每日低峰 `POST /verify` 抽样核对（被 mask 表除外——脱敏列必然 DIFF）。
@@ -436,12 +438,12 @@ curl http://127.0.0.1:9595/metrics                            # Prometheus 指�
 下游、位点、全量标记、DDL 审批、暂停标志；一个 Web 控制台、一个指标端口、
 一次选主覆盖全部源。完整设计见 `docs/prd/`。
 
-**升级零操作**：现行 v1 配置（顶层 source/targets/rules）加载后自动包装为
-`sources: [{id: "default"}]`，etcd 存量键启动时自动迁移到
+**升级一步**：顶层 `source/targets/rules` 旧形态已移除（2026-11 统一
+`sources[]`，单源=数组一条）——升级时把配置正文包一层 `sources: [{id: "default"}]`
+（内嵌原三段），其余零改动。etcd 存量键（位点/标记）启动时仍自动迁移到
 `sources/default/` 子树（幂等，日志 `etcd_keys_migrated`）。
-
-**多源写法**（完整字段与校验规则见 `internal/config/README.md §4.5` 与
-`deploy/config.multi-source.example.yml`）：
+**升级正文的 id 必须填 `default`**：键迁移固定落到该子树，id 改名即对不上
+位点——等于弃位点从头全量（要走别的 id 就先用 etcdctl 手工搬键）。
 
 ```yaml
 pipeline: {workers: 4, worker_queue_size: 8192, batch_size: 500}   # 集群默认

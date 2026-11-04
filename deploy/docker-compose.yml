@@ -6,7 +6,7 @@
 #   cd deploy && docker compose --profile cluster up -d
 #
 # 演示配置用 -config-file 挂载（03 §3.1 开发模式；位点/选举仍走 etcd）。
-# 生产形态：配置写入 etcd（{prefix}/config），二进制只给 -cluster/-etcd。
+# 生产形态：配置写入 etcd 配置键（默认 /config/edu.mall.gocdc/system），二进制只给 -etcd（或 ETCD_HOSTS）。
 name: gocdc-demo
 
 services:

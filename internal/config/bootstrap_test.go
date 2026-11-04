@@ -14,28 +14,30 @@ func TestValidate_DottedSchemaAndTargetDB(t *testing.T) {
 	dir := t.TempDir()
 	mk := func(rulesYAML, targetDB string) string {
 		raw := `cluster: c1
-source:
-  addr: "10.0.0.1:3306"
-  user: repl
-  password: x
-  charset: utf8mb4
-  flavor: mysql
-  server_id: 1
-  timezone: Asia/Shanghai
-  exclude_schemas: [mysql, sys, information_schema, performance_schema]
 ha: { lease_ttl_seconds: 10 }
 pipeline: { workers: 1, worker_queue_size: 8192, batch_size: 1 }
-targets:
-  mysql:
-    enabled: true
-    addr: "10.0.1.1:3306"
-    user: w
-    password: x
-    charset: utf8mb4
-    max_open_conns: 5
-    tx_chunk_rows: 500
-    target_database: ` + targetDB + `
-rules:
+sources:
+  - id: main
+    source:
+      addr: "10.0.0.1:3306"
+      user: repl
+      password: x
+      charset: utf8mb4
+      flavor: mysql
+      server_id: 1
+      timezone: Asia/Shanghai
+      exclude_schemas: [mysql, sys, information_schema, performance_schema]
+    targets:
+      mysql:
+        enabled: true
+        addr: "10.0.1.1:3306"
+        user: w
+        password: x
+        charset: utf8mb4
+        max_open_conns: 5
+        tx_chunk_rows: 500
+        target_database: ` + targetDB + `
+    rules:
 ` + rulesYAML + `
 observability:
   metrics_addr: ":9595"
@@ -44,22 +46,19 @@ observability:
 		return writeBootstrapFile(t, dir, "dotted.yml", raw)
 	}
 
-	good := mk(`  - {schema: edu.mall.admin, target_database: edu.mall.merge, sinks: {mysql: true},
-     tables: [{table: admin_user, order_by_column: id, do_stock: true}]}`,
+	good := mk(`      - {schema: edu.mall.admin, target_database: edu.mall.merge, sinks: {mysql: true}, tables: [{table: admin_user, order_by_column: id, do_stock: true}]}`,
 		"edu.mall.merge")
 	if res := Load(context.Background(), good, "", "c1", nil); len(res.Errors) != 0 {
 		t.Fatalf("带点库名应通过校验: %v", res.Errors)
 	}
 
-	badTable := mk(`  - {schema: edu.mall.admin, sinks: {mysql: true},
-     tables: [{table: bad.table, order_by_column: id, do_stock: true}]}`,
+	badTable := mk(`      - {schema: edu.mall.admin, sinks: {mysql: true}, tables: [{table: bad.table, order_by_column: id, do_stock: true}]}`,
 		"edu.mall.merge")
 	if res := Load(context.Background(), badTable, "", "c1", nil); len(res.Errors) == 0 {
 		t.Fatal("表名带点应报错")
 	}
 
-	badDB := mk(`  - {schema: edu.mall.admin, sinks: {mysql: true},
-     tables: [{table: admin_user, order_by_column: id, do_stock: true}]}`,
+	badDB := mk(`      - {schema: edu.mall.admin, sinks: {mysql: true}, tables: [{table: admin_user, order_by_column: id, do_stock: true}]}`,
 		"bad db")
 	if res := Load(context.Background(), badDB, "", "c1", nil); len(res.Errors) == 0 {
 		t.Fatal("target_database 含空白应报错")
@@ -93,6 +92,7 @@ func writeBootstrapFile(t *testing.T, dir, name, content string) string {
 // TestResolveStartup_FileShape file 形态：整个文件即全量配置，协调面 etcd
 // 取 bootstrap.etcd_addrs（位点/选举仍走 etcd，不可省）。
 func TestResolveStartup_FileShape(t *testing.T) {
+	t.Setenv("ETCD_HOSTS", "") // 隔离开发机环境变量（env 层参与裁决）
 	dir := t.TempDir()
 	path := writeBootstrapFile(t, dir, DefaultBootstrapFile, `
 cluster: edu-mall
@@ -117,16 +117,17 @@ rules: [{schema: db1, sinks: {mysql: true}}]
 	if len(st.ConfigCenterAddrs) != 0 {
 		t.Fatalf("file 形态不应有配置中心: %v", st.ConfigCenterAddrs)
 	}
-	if st.ConfigKey != DefaultConfigKey("edu-mall") {
-		t.Fatalf("key 应为默认: %q", st.ConfigKey)
+	if st.ConfigKey != DefaultConfigCenterKey {
+		t.Fatalf("key 应为终极默认（公司约定键）: %q", st.ConfigKey)
 	}
 }
 
 // TestResolveStartup_EtcdShape etcd 形态（生产引导桩）：配置从配置中心拉，
 // 协调面缺省回退配置中心同实例；显式 bootstrap.etcd_addrs 时分离两实例。
 func TestResolveStartup_EtcdShape(t *testing.T) {
+	t.Setenv("ETCD_HOSTS", "") // 隔离开发机环境变量（env 层参与裁决）
 	dir := t.TempDir()
-	// 未给协调面地址 → 回退配置中心
+	// 未给协调面地址 → 回退配置中心；未给 config_center.key → 终极默认（公司约定键）
 	path := writeBootstrapFile(t, dir, "stub.yml", `
 cluster: edu-merge-prod
 bootstrap:
@@ -146,6 +147,26 @@ bootstrap:
 	}
 	if len(st.CoordinationAddrs) != 1 || st.CoordinationAddrs[0] != "cfg.etcd:2379" {
 		t.Fatalf("协调面应回退配置中心: %v", st.CoordinationAddrs)
+	}
+	if st.ConfigKey != DefaultConfigCenterKey {
+		t.Fatalf("key 应为终极默认（公司约定键）: %q", st.ConfigKey)
+	}
+
+	// 桩内显式 config_center.key → 覆盖终极默认（多集群共享配置中心的隔离手段）
+	path = writeBootstrapFile(t, dir, "stub-key.yml", `
+cluster: edu-merge-prod
+bootstrap:
+  config_source: etcd
+  config_center:
+    etcd_addrs: ["cfg.etcd:2379"]
+    key: "/gocdc/edu-merge-prod/config"
+`)
+	st, err = ResolveStartup(StartupFlags{}, path)
+	if err != nil {
+		t.Fatalf("带 key 的桩不应报错: %v", err)
+	}
+	if st.ConfigKey != "/gocdc/edu-merge-prod/config" {
+		t.Fatalf("桩 key 应覆盖默认: %q", st.ConfigKey)
 	}
 
 	// 协调面与配置中心分离（位点 etcd 可与配置中心不同实例）
@@ -178,6 +199,7 @@ bootstrap: {config_source: etcd}
 
 // TestResolveStartup_FlagOverride flag 覆盖引导文件（flag > 文件）。
 func TestResolveStartup_FlagOverride(t *testing.T) {
+	t.Setenv("ETCD_HOSTS", "") // 隔离开发机环境变量（env 层参与裁决）
 	dir := t.TempDir()
 	path := writeBootstrapFile(t, dir, DefaultBootstrapFile, `
 cluster: from-file
@@ -213,9 +235,10 @@ rules: [{schema: db1, sinks: {mysql: true}}]
 	}
 }
 
-// TestResolveStartup_LegacyFlags 纯 flag 模式：无引导文件时
-// -cluster + -etcd 必填，同一 etcd 兼任配置中心与协调面。
+// TestResolveStartup_LegacyFlags 纯 flag 模式：无引导文件时 -etcd（或
+// ETCD_HOSTS）必填，同一 etcd 兼任配置中心与协调面；cluster 缺省 gocdc-mysql。
 func TestResolveStartup_LegacyFlags(t *testing.T) {
+	t.Setenv("ETCD_HOSTS", "") // 隔离开发机环境变量（env 层参与裁决）
 	missing := filepath.Join(t.TempDir(), "nonexistent.yml")
 
 	// 无文件 + 无 flag → 报错并给出三种启动方式
@@ -224,7 +247,7 @@ func TestResolveStartup_LegacyFlags(t *testing.T) {
 		t.Fatalf("无文件无 flag 应报错并指引: %v", err)
 	}
 
-	// 无文件 + flag 全 → 纯 flag 模式
+	// 无文件 + flag 全 → 纯 flag 模式；config-key 未给 = 终极默认（公司约定键）
 	st, err := ResolveStartup(StartupFlags{Cluster: "demo", Etcd: "etcd:2379"}, missing)
 	if err != nil {
 		t.Fatalf("纯 flag 模式不应报错: %v", err)
@@ -235,6 +258,9 @@ func TestResolveStartup_LegacyFlags(t *testing.T) {
 	if st.ConfigCenterAddrs[0] != "etcd:2379" || st.CoordinationAddrs[0] != "etcd:2379" {
 		t.Fatalf("纯 flag 模式应单 etcd 双角色: center=%v coord=%v", st.ConfigCenterAddrs, st.CoordinationAddrs)
 	}
+	if st.ConfigKey != DefaultConfigCenterKey {
+		t.Fatalf("config-key 未给应取终极默认: %q", st.ConfigKey)
+	}
 
 	// 无文件 + flag 缺 → 报错
 	if _, err = ResolveStartup(StartupFlags{Cluster: "demo"}, missing); err == nil {
@@ -242,8 +268,40 @@ func TestResolveStartup_LegacyFlags(t *testing.T) {
 	}
 }
 
-// TestResolveStartup_Errors 非法 source、file 形态缺协调面地址、cluster 缺失。
+// TestResolveStartup_EnvEtcdFallback 公司约定形态：ETCD_HOSTS 环境变量给 etcd，
+// 零参数/零文件启动——cluster 终极默认 gocdc-mysql、配置键终极默认公司约定键；
+// 显式 -etcd 仍优先于 env。
+func TestResolveStartup_EnvEtcdFallback(t *testing.T) {
+	t.Setenv("ETCD_HOSTS", "env.etcd:2379")
+	missing := filepath.Join(t.TempDir(), "nonexistent.yml")
+
+	st, err := ResolveStartup(StartupFlags{}, missing)
+	if err != nil {
+		t.Fatalf("ETCD_HOSTS 零参数启动不应报错: %v", err)
+	}
+	if st.Cluster != DefaultClusterName {
+		t.Fatalf("cluster 应取终极默认: %q", st.Cluster)
+	}
+	if st.ConfigCenterAddrs[0] != "env.etcd:2379" || st.CoordinationAddrs[0] != "env.etcd:2379" {
+		t.Fatalf("etcd 应取 env: center=%v coord=%v", st.ConfigCenterAddrs, st.CoordinationAddrs)
+	}
+	if st.ConfigKey != DefaultConfigCenterKey {
+		t.Fatalf("key 应为终极默认: %q", st.ConfigKey)
+	}
+
+	// 显式 flag > env
+	st, err = ResolveStartup(StartupFlags{Cluster: "demo", Etcd: "flag.etcd:2379"}, missing)
+	if err != nil {
+		t.Fatalf("flag 覆盖不应报错: %v", err)
+	}
+	if st.CoordinationAddrs[0] != "flag.etcd:2379" || st.Cluster != "demo" {
+		t.Fatalf("flag 应优先于 env: %+v", st)
+	}
+}
+
+// TestResolveStartup_Errors 非法 source、file 形态缺协调面地址。
 func TestResolveStartup_Errors(t *testing.T) {
+	t.Setenv("ETCD_HOSTS", "") // 隔离开发机环境变量（env 层参与裁决）
 	dir := t.TempDir()
 
 	// file 形态无任何 etcd 地址 → 协调面未配置
@@ -260,17 +318,21 @@ func TestResolveStartup_Errors(t *testing.T) {
 		t.Fatalf("非法 source 应报错: %v", err)
 	}
 
-	// cluster 两边都空
+	// cluster 两边都空 → 不再报错，取终极默认 gocdc-mysql
 	path = writeBootstrapFile(t, dir, "noc.yml", "bootstrap: {etcd_addrs: [\"e:2379\"]}\n")
-	if _, err := ResolveStartup(StartupFlags{}, path); err == nil ||
-		!strings.Contains(err.Error(), "cluster") {
-		t.Fatalf("cluster 缺失应报错: %v", err)
+	st, err := ResolveStartup(StartupFlags{}, path)
+	if err != nil {
+		t.Fatalf("cluster 缺失应取终极默认而非报错: %v", err)
+	}
+	if st.Cluster != DefaultClusterName {
+		t.Fatalf("cluster 应取终极默认: %q", st.Cluster)
 	}
 }
 
 // TestLoadBootstrap_EnvPlaceholder 引导文件支持 ${ENV} 占位（与全量配置同链）。
 func TestLoadBootstrap_EnvPlaceholder(t *testing.T) {
 	t.Setenv("GOCDC_TEST_ETCD", "env.etcd:2379")
+	t.Setenv("ETCD_HOSTS", "") // 隔离开发机环境变量（env 层参与裁决）
 	dir := t.TempDir()
 	path := writeBootstrapFile(t, dir, DefaultBootstrapFile, `
 cluster: c1

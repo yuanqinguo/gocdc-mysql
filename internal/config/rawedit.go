@@ -1,6 +1,6 @@
 // 原始正文手术与重载（Web 规则编辑 PUT 链路的服务端底座，13 §3）：
 //
-//	LoadFromRaw      原始 YAML 字节走完整加载链（parse → ${ENV} → v1→v2 →
+//	LoadFromRaw      原始 YAML 字节走完整加载链（parse → ${ENV} →
 //	                 defaults → Validate），Load 的纯内存变体（可测/可复用）；
 //	SpliceSourceRules yaml.Node 层手术——只替换指定源的 rules 段，其余部分
 //	                 （注释/键序/${ENV} 占位/引号风格）原样保留；
@@ -29,8 +29,10 @@ func LoadFromRaw(raw []byte, flagCluster string) LoadResult {
 		return LoadResult{Errors: []error{perr}}
 	}
 	resolved, envErrs := ResolveEnv(tree)
-	normalized, normErrs := normalizeTree(resolved)
-	buf, err := json.Marshal(normalized)
+	if verrs := rejectV1Form(resolved); len(verrs) > 0 {
+		return LoadResult{Errors: append(envErrs, verrs...)}
+	}
+	buf, err := json.Marshal(resolved)
 	if err != nil {
 		return LoadResult{Errors: append(envErrs, fmt.Errorf("配置重新编码失败: %w", err))}
 	}
@@ -39,18 +41,14 @@ func LoadFromRaw(raw []byte, flagCluster string) LoadResult {
 		return LoadResult{Errors: append(envErrs, fmt.Errorf("配置结构解析失败: %w", err))}
 	}
 	errs := append([]error{}, envErrs...)
-	errs = append(errs, normErrs...)
 	ApplyDefaults(&cfg)
 	errs = append(errs, Validate(&cfg, flagCluster)...)
 	return LoadResult{Config: &cfg, Errors: errs}
 }
 
 // SpliceSourceRules 在 raw 的 yaml.Node 层替换 sourceID 源的 rules 段，返回
-// 新正文字节。支持双形态：
-//
-//	v2（sources: [...]）：定位 id==sourceID 的条目，替换/追加其 rules 键；
-//	v1（顶层 source/targets/rules，自动包装为 default 源）：sourceID 须为
-//	    DefaultSourceID，替换顶层 rules 键。
+// 新正文字节：定位 sources[] 中 id==sourceID 的条目，替换/追加其 rules 键
+// （正文无 sources 键 = 已移除的 v1 顶层形态，报错给改写指引）。
 //
 // rules 值节点由 JSON 编码桥接（json tags 即权威字段名），再经 plainSafe
 // 归一去掉不必要的双引号——安全值（如 mask 算法名 null/true）保留引号，
@@ -72,7 +70,6 @@ func SpliceSourceRules(raw []byte, sourceID string, rules []Rule) ([]byte, error
 	}
 
 	if srcs := mappingValue(root, "sources"); srcs != nil {
-		// v2：sources[] 中定位 id 条目
 		if srcs.Kind != yaml.SequenceNode {
 			return nil, fmt.Errorf("sources 须为列表")
 		}
@@ -87,13 +84,7 @@ func SpliceSourceRules(raw []byte, sourceID string, rules []Rule) ([]byte, error
 		}
 		return nil, fmt.Errorf("sources 中不存在 id=%q 的源（PUT 只改既有源的规则；加源须走配置正文新增条目）", sourceID)
 	}
-
-	// v1：顶层 rules（自动包装形态的 default 源）
-	if sourceID != DefaultSourceID {
-		return nil, fmt.Errorf("配置正文为 v1 单源形态（仅 default 源），无 sources/%s 条目", sourceID)
-	}
-	setMappingValue(root, "rules", valNode)
-	return encodeNode(&doc)
+	return nil, fmt.Errorf("配置正文无 sources 键（顶层 source/targets/rules 形态已移除，请改写为 sources[] 后再编辑）")
 }
 
 // rulesValueNode rules 值节点：struct → JSON（权威字段名）→ yaml.Node →

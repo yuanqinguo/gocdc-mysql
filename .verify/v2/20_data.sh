@@ -130,8 +130,16 @@ echo "  表数=$N all_types.ddl=$AT users.mask=$MK tmp_log命中=$EX"
 MF=$(curl -s --noproxy '*' localhost:9595/metrics | grep -oE '^gocdc_[a-z_]+' | sort -u | wc -l)
 echo "  H1 指标族数=$MF"
 [ "$MF" -ge 15 ] && ok "H1 指标族齐全" || bad "H1 指标族=$MF"
-L2=$(lagof 9595)
-[ "$L2" = "0" ] && ok "H2 追平口径 lag=0" || bad "H2 lag=$L2"
+# H2 追平口径：master_position_lag_bytes 是 SaveInterval(3s) 周期采样 gauge——
+# b10 大事务落库瞬间单发首探必读到陈旧积压（2026-10-31 r2 教训，B 系列已补
+# 第二层轮询、H2 此前漏了）。轮询收敛窗口替代单发读，语义不变（最终追平）。
+H2OK=0
+for i in $(seq 1 15); do
+  L2=$(lagof 9595)
+  [ "$L2" = "0" ] && { H2OK=1; break; }
+  sleep 1
+done
+[ "$H2OK" = "1" ] && ok "H2 追平口径 lag=0（t=${i}s）" || bad "H2 lag=$L2"
 HITS=$(grep -cE '(password|pwd|root)["=: ]*123456|demo123' /tmp/v2/node1.log 2>/dev/null || true)
 [ "${HITS:-0}" = "0" ] && ok "H4 日志无密码泄漏" || bad "H4 泄漏=$HITS"
 

@@ -4,10 +4,13 @@
 //
 //	gocdc                          # 零参数：读工作目录 config.local.yml（GoLand 调试形态）
 //	gocdc -config-file <yml>       # 指定引导/配置文件
+//	ETCD_HOSTS=<addrs> gocdc       # 公司约定形态：env 给 etcd，cluster=gocdc-mysql，
+//	                               # 配置读 /config/edu.mall.gocdc/system（固定键）
 //	gocdc -cluster <n> -etcd <addrs> [-config-key <path>] [-config-file <yml>]   # 纯 flag 模式
 //
-// 两种 etcd 角色可分离：配置中心（bootstrap.config_center，一个 etcd 按集群
-// 前缀隔离多环境）与协调面（位点/选举，bootstrap.etcd_addrs）。
+// 两种 etcd 角色可分离：配置中心（bootstrap.config_center，按 config_center.key
+// 隔离多环境/多集群）与协调面（位点/选举，bootstrap.etcd_addrs，前缀
+// /gocdc/{cluster}）。
 //
 // 文件分工：main.go（flag/编排）、bootstrap.go（启动裁决/配置/日志/指标/协调面/
 // 源库检查）、components.go（组件装配）、lifecycle.go（选举驱动的管线生命周期）、
@@ -56,9 +59,9 @@ type options struct {
 func parseFlags(args []string) (*options, error) {
 	opts := &options{}
 	fs := flag.NewFlagSet("gocdc", flag.ContinueOnError)
-	fs.StringVar(&opts.cluster, "cluster", "", "集群名覆盖（缺省取引导文件的 cluster；决定 etcd key 前缀 /gocdc/{cluster}）")
-	fs.StringVar(&opts.etcdAddrs, "etcd", "", "协调面 etcd 覆盖，逗号分隔（位点/选举；缺省取引导文件；无引导文件时兼作配置中心）")
-	fs.StringVar(&opts.configKey, "config-key", "", "配置 key 路径覆盖（默认 /gocdc/{cluster}/config）")
+	fs.StringVar(&opts.cluster, "cluster", "", "集群名覆盖（缺省取引导文件 cluster，再缺省 gocdc-mysql；决定协调面前缀 /gocdc/{cluster}）")
+	fs.StringVar(&opts.etcdAddrs, "etcd", "", "协调面 etcd 覆盖，逗号分隔（缺省取环境变量 ETCD_HOSTS，再缺省取引导文件；无引导文件时兼作配置中心）")
+	fs.StringVar(&opts.configKey, "config-key", "", "配置 key 路径覆盖（缺省取引导桩 config_center.key，再缺省 /config/edu.mall.gocdc/system）")
 	fs.StringVar(&opts.configFile, "config-file", "", "引导/配置文件路径覆盖（默认工作目录 config.local.yml）")
 	fs.BoolVar(&opts.showVersion, "version", false, "打印版本信息后退出")
 	if err := fs.Parse(args); err != nil {

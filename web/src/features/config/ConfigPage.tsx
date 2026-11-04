@@ -1,14 +1,14 @@
 import { useState, type ReactNode } from 'react'
 import { App as AntApp, Button, Segmented } from 'antd'
 import { CodeOutlined, CopyOutlined, DatabaseOutlined, SafetyCertificateOutlined } from '@ant-design/icons'
-import { useQueries } from '@tanstack/react-query'
-import { useApi } from '@/app/api'
-import { queryKeys, useConfig, useDDLEventsAll, useStatus } from '@/shared/api/queries'
+import { useConfig, useDDLEventsAll, useEffectiveRules, useSources, useStatus } from '@/shared/api/queries'
+import type { DDLRecord } from '@/shared/api/types'
 import { Callout } from '@/shared/components/Callout'
 import { ErrorState, LoadingState } from '@/shared/components/PageState'
 import { PageHeader } from '@/shared/components/PageHeader'
 import { Chip } from '@/shared/components/presentation'
 import { RuleExplorer } from '@/features/rules/RuleExplorer'
+import { RulesManage } from './RulesManage'
 
 type ConfigTab = 'config' | 'rules'
 
@@ -35,10 +35,10 @@ export function ConfigPage() {
       code="05"
       eyebrow="系统 / 运行配置 · 集群级"
       title="生效配置"
-      description="集群全量配置文档（含全部 sources[]）与编译后的规则视图（组形态白名单）。修改须在外部配置中心完成并重启服务。"
+      description="集群全量配置文档（含全部 sources[]）。「规则视图（按库）」页签按源提供源库/表的在线增删改（校验+活体预检+CAS 保存，应用重启后生效）；其余配置须在外部配置中心完成并重启服务。"
     />
-    <Callout tone="info" title="只读视图">
-      配置仅可查看，不在管理台编辑。敏感字段由服务端打码；请勿将页面内容复制到公开渠道。
+    <Callout tone="info" title="查看与编辑范围">
+      「生效配置」页签仅查看（敏感字段由服务端打码，请勿复制到公开渠道）；「规则视图（按库）」页签可直接增删改各源的同步白名单，保存前服务端自动校验与活体预检，保存后需应用重启生效。
     </Callout>
     <section className="panel config-panel">
       <div className="config-toolbar">
@@ -80,44 +80,49 @@ export function ConfigPage() {
 
 const JSON_TOKEN = /("(?:\\.|[^"\\])*")(\s*:)?|\b(true|false|null)\b|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/g
 
-/** 规则视图（按库）：配置是全量 v2——按 sources[] 分组展示（每组标注所属源）。 */
+/** 规则视图（按库）：配置是全量 v2——按 sources[] 分节，每源一个在线编辑视图
+ * （RulesManage，sid 作用域）；本地文件配置形态下回退只读生效视图。 */
 function ConfigRulesTab() {
-  const api = useApi()
   const status = useStatus()
+  const sources = useSources()
   const ddlAll = useDDLEventsAll()
   const ids = status.data?.sources.map((source) => source.id) ?? []
-  const rulesQueries = useQueries({
-    queries: ids.map((sid) => ({
-      queryKey: queryKeys.rules(sid),
-      queryFn: ({ signal }) => api.getEffectiveRulesOf(sid, signal),
-      staleTime: 30_000,
-    })),
-  })
+  const ddlRecords = ddlAll.data ?? []
+  // 该源 targets 已启用的下游：新增源库时 sinks 开关的默认值与提示
+  const sinksBySid = new Map((sources.data ?? []).map((source) => [source.id, source.sinks]))
   if (status.error) return <div className="config-state"><ErrorState error={status.error} onRetry={() => void status.refetch()} /></div>
   if (status.isPending) return <div className="config-state"><LoadingState /></div>
   return (
     <div className="config-rules">
-      {rulesQueries.map((query, index) => {
-        const sid = ids[index]
-        return (
-          <section className="config-source-group" key={sid}>
-            <header className="config-source-head">
-              <span className="entity"><span className="entity-icon"><DatabaseOutlined /></span><span><b>{sid}</b></span></span>
-              <Chip tone="muted">{query.data?.length ?? 0} 张表</Chip>
-            </header>
-            {query.error
-              ? <ErrorState error={query.error} onRetry={() => void query.refetch()} />
-              : query.isPending
-                ? <LoadingState />
-                : <RuleExplorer
-                    rules={query.data ?? []}
-                    pendingDDL={(ddlAll.data ?? []).filter((record) => record.source === sid)}
-                    schemaSearchPlaceholder={`在源 ${sid} 中搜索源库…`}
-                  />}
-          </section>
-        )
-      })}
+      {ids.map((sid) => (
+        <section className="config-source-group" key={sid}>
+          <header className="config-source-head">
+            <span className="entity"><span className="entity-icon"><DatabaseOutlined /></span><span><b>{sid}</b></span></span>
+            <Chip tone="muted">在线编辑 · 保存后需应用重启生效</Chip>
+          </header>
+          <RulesManage
+            sid={sid}
+            pendingDDL={ddlRecords.filter((record) => record.source === sid).map((record) => ({ schema: record.schema, table: record.table }))}
+            enabledSinks={sinksBySid.get(sid) ?? []}
+            readOnlyView={<SourceEffectiveRules sid={sid} ddlRecords={ddlRecords} />}
+          />
+        </section>
+      ))}
     </div>
+  )
+}
+
+/** file 配置形态下的只读回退：该源编译后生效规则（原「规则视图（按库）」形态）。 */
+function SourceEffectiveRules({ sid, ddlRecords }: { sid: string; ddlRecords: DDLRecord[] }) {
+  const rules = useEffectiveRules(sid)
+  if (rules.isPending) return <LoadingState />
+  if (rules.error) return <ErrorState error={rules.error} onRetry={() => void rules.refetch()} />
+  return (
+    <RuleExplorer
+      rules={rules.data ?? []}
+      pendingDDL={ddlRecords.filter((record) => record.source === sid).map((record) => ({ schema: record.schema, table: record.table }))}
+      schemaSearchPlaceholder={`在源 ${sid} 中搜索源库…`}
+    />
   )
 }
 

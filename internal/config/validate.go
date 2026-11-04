@@ -74,7 +74,7 @@ func Validate(c *Config, flagCluster string) []error {
 
 	// ── sources：V1 数量 + V2 id + 逐源 V3/V6 ────────────────
 	if len(c.Sources) == 0 {
-		errf("sources 不能为空（至少 1 条；v1 顶层 source/targets/rules 自动包装为 default 源）")
+		errf("sources 不能为空（至少 1 条；单源部署同样是 sources 数组一条，见 README §4.5）")
 	}
 	if len(c.Sources) > maxSources {
 		errf("sources 至多 %d 条（容量规划见 PRD 05 §5），当前 %d", maxSources, len(c.Sources))

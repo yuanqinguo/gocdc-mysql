@@ -10,12 +10,27 @@ import (
 	"regexp"
 )
 
+const (
+	// ServerName 是本服务的短名，用于默认本地配置文件名。
+	ServerName = "gocdc"
+	// ServerFullName 是远程配置中心里的服务完整名。
+	ServerFullName = "edu.mall.gocdc"
+	// DefaultClusterName 集群名终极默认（引导文件与 -cluster 均未给时）。
+	DefaultClusterName = "gocdc-mysql"
+	// DefaultConfigCenterKey 配置中心 key 的终极默认（公司约定路径：
+	// /config/{服务完整名}/system）。多集群共享同一配置中心 etcd 时，各集群须以
+	// 引导桩 config_center.key 或 -config-key 显式区分——集群名只决定协调面前缀
+	// /gocdc/{cluster}，不再决定配置键。
+	DefaultConfigCenterKey = "/config/" + ServerFullName + "/system"
+)
+
 // Config 全量配置根（etcd 单 key，正文 YAML）。
 //
-// 加载链路（Load）：原始 YAML → ${ENV} 解析 → v1→v2 规范化（顶层
-// source/targets/rules 自动包装为 sources[default]）→ 反序列化 →
+// 加载链路（Load）：原始 YAML → ${ENV} 解析 → 反序列化 →
 // ApplyDefaults（源级覆盖合并 + 0 值填默认）→ Validate（严格校验，全部错误
-// 一次报出）。因此字段注释中的「0 = 默认 X」均指省略/填 0 时由
+// 一次报出）。配置面统一 sources[]（单源即数组一条）；顶层
+// source/targets/rules 为已移除的 v1 形态，命中即报错并给改写指引。
+// 因此字段注释中的「0 = 默认 X」均指省略/填 0 时由
 // ApplyDefaults 填充。
 type Config struct {
 	Cluster string `json:"cluster"` // 必须等于 -cluster flag；flag 是 etcd key 前缀唯一来源（03 §3.1 裁决）
@@ -33,15 +48,15 @@ type Config struct {
 
 // SourceSpec 一条同步源（多源 PRD 03 §1）：现行单源集群全部数据面配置的
 // 打包——源库连接 + 规则 + 下游 + 管线/全量参数。pipeline/stock 为覆盖补丁
-//（nil = 全继承集群默认；非 nil 时未给字段逐项继承，见 ResolvePipeline）。
+// （nil = 全继承集群默认；非 nil 时未给字段逐项继承，见 ResolvePipeline）。
 //
 // Load/ApplyDefaults 之后 Pipeline/Stock 恒非 nil 且已是合并完整值——校验与
 // 运行时看到的每个源都是完整值，与现行单源视角一致。
 type SourceSpec struct {
-	ID      string   `json:"id"`      // 源标识（source_id/sid）：^[a-z][a-z0-9_-]{1,31}$，cluster 内唯一；etcd key 段/指标 label/API 路径/日志/envelope 共用
-	Source  Source   `json:"source"`  // 源库连接（现行 Source 块原样下沉）
-	Targets Targets  `json:"targets"` // 该源独立下游（独立连接池/生产者，不跨源共享）
-	Rules   []Rule   `json:"rules"`   // 规则组（作用域收敛到该源：schema 源内唯一即可）
+	ID      string  `json:"id"`      // 源标识（source_id/sid）：^[a-z][a-z0-9_-]{1,31}$，cluster 内唯一；etcd key 段/指标 label/API 路径/日志/envelope 共用
+	Source  Source  `json:"source"`  // 源库连接（现行 Source 块原样下沉）
+	Targets Targets `json:"targets"` // 该源独立下游（独立连接池/生产者，不跨源共享）
+	Rules   []Rule  `json:"rules"`   // 规则组（作用域收敛到该源：schema 源内唯一即可）
 
 	Pipeline *Pipeline `json:"pipeline,omitempty"` // 管线参数覆盖补丁（Load 后为合并完整值）
 	Stock    *Stock    `json:"stock,omitempty"`    // 全量参数覆盖补丁（Load 后为合并完整值）
@@ -51,11 +66,13 @@ type SourceSpec struct {
 // 与 cluster/topic 前缀字符集风格一致。
 var SourceIDRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{1,31}$`)
 
-// DefaultSourceID v1 配置自动包装与 etcd 键迁移的落点源 id（保留值）。
+// DefaultSourceID etcd 旧键布局迁移（cmd migrate_keys：存量键 →
+// sources/default/ 子树）的落点源 id（历史保留值；配置正文不再自动包装，
+// 正文中的源 id 一律显式声明）。
 const DefaultSourceID = "default"
 
 // ResolvePipeline 合并解析：源覆盖 > 集群默认。字段级语义 = 非零覆盖
-//（与 ApplyDefaults 的「0 值 = 未设」约定一致；结构上 0 值字段本就非法，
+// （与 ApplyDefaults 的「0 值 = 未设」约定一致；结构上 0 值字段本就非法，
 // 不存在「显式 0」的合法用例）。
 func (s *SourceSpec) ResolvePipeline(base Pipeline) Pipeline {
 	out := base
@@ -129,7 +146,7 @@ func (c *Config) SourceIDs() []string {
 	return out
 }
 
-// Single 唯一源便捷取用（v1 包装/单源部署；调用方保证 len(Sources) ≥ 1，
+// Single 唯一源便捷取用（单源部署；调用方保证 len(Sources) ≥ 1，
 // 校验 V1 已把关）。
 func (c *Config) Single() *SourceSpec { return &c.Sources[0] }
 

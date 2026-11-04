@@ -1,5 +1,6 @@
 # ─────────────────────────────────────────────────────────────────────
 # 单节点形态示例（config_version: 2）
+#   配置统一 sources[] 形态：单源部署即数组一条（本例 id=default）。
 #   ha.enabled: false —— 跳过选举，进程直接以 leader 启动管线；位点/标记
 #   仍走协调面 etcd 租约门槛（session 死亡 → 门键消失 → 位点写被拒 →
 #   管线停，恢复需重启进程）。适合单机部署/开发环境。
@@ -9,75 +10,71 @@
 #   docker-compose 形态把地址换成服务名（如 mysql-src:3306）即可。
 #   生产密码一律 ${ENV} 注入（03 §3.2），演示取明文。
 # ─────────────────────────────────────────────────────────────────────
+
 config_version: 2
 cluster: gocdc-single
+sources:
+  - id: "default"
+    source:
+      addr: "127.0.0.1:13306" # 源库（须开 binlog ROW + 可选 GTID）
+      user: root
+      password: "123456" # 生产：${SRC_PASSWORD}
+      charset: utf8mb4
+      flavor: mysql # mysql | mariadb
+      server_id: 12345 # 缺省 0 = 按 node.id:sid 派生（多副本不冲突）
+      timezone: Asia/Shanghai # DATETIME 解释时区，必须与源库写入时区一致
+      heartbeat_interval_ms: 3000
+      read_timeout_ms: 60000
+      exclude_schemas: [mysql, sys, information_schema, performance_schema] # 四系统库强制排除
+      use_gtid: true # GTID 模式（主从切换免人工修位点）
+    targets:
+      mysql:
+        enabled: true
+        addr: "127.0.0.1:13307" # 目标库；同名库表须预建（结构核对 fail-fast）
+        user: root
+        password: "123456" # 生产：${DST_PASSWORD}
+        charset: utf8mb4
+        max_open_conns: 20 # 必须 ≥1 显式声明（每源独立池）
+        max_idle_conns: 5
+        conn_max_lifetime_min: 30
+        tx_chunk_rows: 500 # 单事务最大行数，大事务切块提交
+        target_database: "" # 空=与源库同名；填了则该实例所有规则写此库
+        ddl_sync: true # auto/审批策略可在目标执行白名单 DDL
+    rules:
+      # 组形态白名单（唯一形态）：组级 sinks/ddl_policy 统一，tables 逐表列出；
 
-source:
-  addr: "127.0.0.1:13306"        # 源库（须开 binlog ROW + 可选 GTID）
-  user: root
-  password: "123456"             # 生产：${SRC_PASSWORD}
-  charset: utf8mb4
-  flavor: mysql                  # mysql | mariadb
-  server_id: 12345               # 缺省 0 = 按 node.id:sid 派生（多副本不冲突）
-  timezone: Asia/Shanghai        # DATETIME 解释时区，必须与源库写入时区一致
-  heartbeat_interval_ms: 3000
-  read_timeout_ms: 60000
-  exclude_schemas: [mysql, sys, information_schema, performance_schema]  # 四系统库强制排除
-  use_gtid: true                 # GTID 模式（主从切换免人工修位点）
-
-node: {}                         # id/advertise_addr 缺省自动派生
-
+      # 未列入的表不同步。表级可选 target_database/exclude_columns/mask_columns。
+      - schema: shop
+        sinks: {mysql: true} # 至少一个下游；声明 mysql 须启用 targets.mysql
+        ddl_policy: auto # auto | pause | ignore
+        tables:
+          - {table: users, order_by_column: id, do_stock: true,} # do_stock=true 参与首启全量
+          # - { table: orders, order_by_column: id, do_stock: true,
+    #     mask_columns: { phone: phone } }                     # 脱敏示例
+node: {} # id/advertise_addr 缺省自动派生
 ha:
-  enabled: false                 # 单节点：无选举（/status role=single）
+  enabled: false # 单节点：无选举（/status role=single）
   lease_ttl_seconds: 10
   leader_check_interval_ms: 2000
   resign_on_shutdown: true
-
 pipeline:
-  workers: 4                     # 1..64；同表事件落同一 worker 串行保序
-  worker_queue_size: 8192        # 每 worker 有界队列（事件数）；满则反压源库
-  batch_size: 500                # 攒批条数（与 flush_interval_ms 先到先发）
+  workers: 4 # 1..64；同表事件落同一 worker 串行保序
+  worker_queue_size: 8192 # 每 worker 有界队列（事件数）；满则反压源库
+  batch_size: 500 # 攒批条数（与 flush_interval_ms 先到先发）
   flush_interval_ms: 200
   position_save_interval_ms: 3000
-
 stock:
-  lock_mode: auto                # auto | lock | none（全量快照一致性锁）
-  chunk_rows: 5000               # 快照分块行数
-  throttle_ms: 0                 # 分块间隔（0=不限速）
-  workers: 4                     # 快照扫描并行度
-
-targets:
-  mysql:
-    enabled: true
-    addr: "127.0.0.1:13307"      # 目标库；同名库表须预建（结构核对 fail-fast）
-    user: root
-    password: "123456"           # 生产：${DST_PASSWORD}
-    charset: utf8mb4
-    max_open_conns: 20           # 必须 ≥1 显式声明（每源独立池）
-    max_idle_conns: 5
-    conn_max_lifetime_min: 30
-    tx_chunk_rows: 500           # 单事务最大行数，大事务切块提交
-    target_database: ""          # 空=与源库同名；填了则该实例所有规则写此库
-    ddl_sync: true               # auto/审批策略可在目标执行白名单 DDL
-
-rules:
-  # 组形态白名单（唯一形态）：组级 sinks/ddl_policy 统一，tables 逐表列出；
-  # 未列入的表不同步。表级可选 target_database/exclude_columns/mask_columns。
-  - schema: shop
-    sinks: { mysql: true }       # 至少一个下游；声明 mysql 须启用 targets.mysql
-    ddl_policy: auto             # auto | pause | ignore
-    tables:
-      - { table: users, order_by_column: id, do_stock: true }   # do_stock=true 参与首启全量
-      # - { table: orders, order_by_column: id, do_stock: true,
-      #     mask_columns: { phone: phone } }                     # 脱敏示例
-
+  lock_mode: auto # auto | lock | none（全量快照一致性锁）
+  chunk_rows: 5000 # 快照分块行数
+  throttle_ms: 0 # 分块间隔（0=不限速）
+  workers: 4 # 快照扫描并行度
 observability:
-  metrics_addr: ${METRICS_ADDR}                # /metrics /healthz /readyz（生产写实际端口，如 ":9595"）
+  metrics_addr: ${METRICS_ADDR} # /metrics /healthz /readyz（生产写实际端口，如 ":9595"）
   web:
     enabled: true
-    addr: ${WEB_ADDR}                  # admin API + 控制台 /api/v1（生产写实际端口，如 ":8060"）
+    addr: ${WEB_ADDR} # admin API + 控制台 /api/v1（生产写实际端口，如 ":8060"）
     username: admin
-    password: ${WEB_PASSWORD}    # 不进配置明文，启动环境注入
+    password: ${WEB_PASSWORD} # 不进配置明文，启动环境注入
     auth_disabled: false
   log:
     level: info
