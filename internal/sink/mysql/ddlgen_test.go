@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"strings"
 	"testing"
+
+	"gocdc/internal/model"
 )
 
 // diffDefs 决策矩阵（2026-11-09 全量对账改造）：全部差异类别必须产出可执行
@@ -113,7 +115,7 @@ func TestDiffDefs_DecisionMatrix(t *testing.T) {
 			whitelisted: true,
 		},
 		{
-			name: "主键变更（自增列随主键保留，无前置/后置）",
+			name: "主键变更（自增列随主键保留 → 单条原子 ALTER）",
 			src: &tableDef{Cols: []ColDef{
 				{Name: "oid", Ordinal: 1, ColumnType: "bigint", RawType: "bigint", AutoInc: true},
 				{Name: "uid", Ordinal: 2, ColumnType: "bigint", RawType: "bigint"},
@@ -122,13 +124,14 @@ func TestDiffDefs_DecisionMatrix(t *testing.T) {
 				{Name: "oid", Ordinal: 1, ColumnType: "bigint", RawType: "bigint", AutoInc: true},
 				{Name: "uid", Ordinal: 2, ColumnType: "bigint", RawType: "bigint"},
 			}, PK: []string{"uid"}},
-			// tgt 旧主键列 uid 非自增 → 无前置；新主键列 oid 双方都已自增 → 无后置
-			wantKinds:   []string{KindPKChange, KindPKChange},
-			wantWhite:   []bool{false, false},
+			// tgt 旧主键列 uid 非自增 → 无前置；新主键列 oid 双方都已自增 → 无后置；
+			// DROP+ADD 合并单条（分开执行 DROP PRIMARY KEY 对自增列报 1075）
+			wantKinds:   []string{KindPKChange},
+			wantWhite:   []bool{false},
 			whitelisted: false,
 		},
 		{
-			name: "旧主键自增列退出主键（前置去自增）",
+			name: "旧主键自增列退出主键（前置去自增 + 原子换键）",
 			src: &tableDef{Cols: []ColDef{
 				{Name: "id", Ordinal: 1, ColumnType: "bigint", RawType: "bigint"},
 				{Name: "uid", Ordinal: 2, ColumnType: "bigint", RawType: "bigint"},
@@ -137,13 +140,13 @@ func TestDiffDefs_DecisionMatrix(t *testing.T) {
 				{Name: "id", Ordinal: 1, ColumnType: "bigint", RawType: "bigint", AutoInc: true},
 				{Name: "uid", Ordinal: 2, ColumnType: "bigint", RawType: "bigint"},
 			}, PK: []string{"id"}},
-			// tgt 旧主键 id 自增且退出新主键 → 先 MODIFY 去自增，再 DROP PK / ADD PK
-			wantKinds:   []string{KindDropAutoInc, KindPKChange, KindPKChange},
-			wantWhite:   []bool{false, false, false},
+			// tgt 旧主键 id 自增且退出新主键 → 先 MODIFY 去自增，再单条 DROP+ADD
+			wantKinds:   []string{KindDropAutoInc, KindPKChange},
+			wantWhite:   []bool{false, false},
 			whitelisted: false,
 		},
 		{
-			name: "新主键列源端自增目标未自增（后置恢复）",
+			name: "新主键列源端自增目标未自增（原子换键 + 后置恢复）",
 			src: &tableDef{Cols: []ColDef{
 				{Name: "id", Ordinal: 1, ColumnType: "bigint", RawType: "bigint"},
 				{Name: "uid", Ordinal: 2, ColumnType: "bigint", RawType: "bigint", AutoInc: true},
@@ -153,8 +156,8 @@ func TestDiffDefs_DecisionMatrix(t *testing.T) {
 				{Name: "uid", Ordinal: 2, ColumnType: "bigint", RawType: "bigint"},
 			}, PK: []string{"id"}},
 			// tgt 旧主键 id 非自增 → 无前置；新主键 uid 源端自增目标非自增 → 后置恢复
-			wantKinds:   []string{KindPKChange, KindPKChange, KindRestoreAutoInc},
-			wantWhite:   []bool{false, false, false},
+			wantKinds:   []string{KindPKChange, KindRestoreAutoInc},
+			wantWhite:   []bool{false, false},
 			whitelisted: false,
 		},
 		{
@@ -273,5 +276,48 @@ func TestDiffDefs_CreateTable(t *testing.T) {
 	}
 	if !strings.Contains(sqlText, "PRIMARY KEY (`a`)") || !strings.Contains(sqlText, "AUTO_INCREMENT") {
 		t.Fatalf("CREATE 语句须含主键与自增: %s", sqlText)
+	}
+}
+
+// 唯一索引对账（2026-11-10 重启拒启陷阱修复）：源端 ADD UNIQUE INDEX 必须生成
+// 补建语句（非白名单）；目标多余唯一索引生成 DROP INDEX。
+func TestDiffDefs_UniqueIndex(t *testing.T) {
+	base := func() *tableDef {
+		return &tableDef{Cols: []ColDef{{Name: "id", Ordinal: 1, ColumnType: "bigint", RawType: "bigint"}}, PK: []string{"id"}}
+	}
+	src := base()
+	src.Unique = []model.UniqueIndex{{Name: "uq_code", Parts: []model.UniqueIndexPart{{Column: "code"}}}}
+	tgt := base()
+
+	res := diffDefs(src, tgt, "dstdb", "t1")
+	if res.Whitelisted {
+		t.Fatal("索引差异应判非白名单（挂起审批）")
+	}
+	found := false
+	for _, s := range res.Stmts {
+		if s.Kind == KindAddUniqueIndex && strings.Contains(s.SQL, "ADD UNIQUE INDEX `uq_code` (`code`)") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("未生成补建唯一索引语句: %+v", res.Stmts)
+	}
+
+	// 反向：目标多余索引 → DROP INDEX
+	res2 := diffDefs(base(), src, "dstdb", "t1")
+	dropped := false
+	for _, s := range res2.Stmts {
+		if s.Kind == KindDropIndex && strings.Contains(s.SQL, "DROP INDEX `uq_code`") {
+			dropped = true
+		}
+	}
+	if !dropped {
+		t.Fatalf("未生成删多余索引语句: %+v", res2.Stmts)
+	}
+
+	// 两端一致 → 无语句
+	res3 := diffDefs(src, src, "dstdb", "t1")
+	if len(res3.Stmts) != 0 {
+		t.Fatalf("索引一致不应有语句: %+v", res3.Stmts)
 	}
 }

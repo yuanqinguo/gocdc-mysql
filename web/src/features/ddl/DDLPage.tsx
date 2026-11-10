@@ -129,8 +129,8 @@ export function DDLPage() {
       {pendingDecision && <>
         <Callout tone={pendingDecision.decision === 'approve' ? 'warning' : 'danger'} title={pendingDecision.decision === 'approve' ? '批准语义' : '跳过语义'}>
           {pendingDecision.decision === 'approve'
-            ? '批准后系统将自动在目标库执行全部对账变更（含加列、删列、改名、类型变更、缩容、主键变更），执行完成并复验一致后自动恢复管线，无需人工改目标库。列改名按「同位置+同类型」推断，请核对展开的变更明细。'
-            : '目标端将保留旧结构，源端变更可能导致字段无法同步。跳过后该事件会被记入审计。'}
+            ? '批准后系统将自动在目标库执行全部对账变更（含加列、删列、改名、类型变更、缩容、主键变更、唯一索引补建/删除），执行完成并复验一致后自动恢复管线，无需人工改目标库。TRUNCATE 事件批准后系统将同步清空目标表数据（镜像源端）。列改名按「同位置+同类型」推断，请核对展开的变更明细。'
+            : '目标端将保留旧结构/旧数据，源端变更可能导致字段或数据无法对齐。跳过后该事件会被记入审计。'}
         </Callout>
         <div className="confirm-meta">
           <span><b>所属源</b><code>{pendingDecision.record.source || effectiveSid || '—'}</code></span>

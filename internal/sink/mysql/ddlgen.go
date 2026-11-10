@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"gocdc/internal/model"
 )
 
 // ErrSourceTableGone diff 时源表已不存在（审批挂起期间被后续 DDL 删除/改名）。
@@ -33,16 +35,18 @@ var ErrSourceTableGone = errors.New("ddlgen: 源表已不存在（DDL 已过期�
 
 // 语句种类（DDLStmt.Kind；审计/审批页明细展示）。
 const (
-	KindAddColumn      = "add_column"      // 加列（白名单）
-	KindModifySafe     = "modify_safe"     // 列安全属性：扩容/默认值/可空/注释（白名单）
-	KindModifyColumn   = "modify_column"   // 列类型变更/缩容（白名单外）
-	KindRenameColumn   = "rename_column"   // 列改名：按位置+类型推断（白名单外）
-	KindDropColumn     = "drop_column"     // 删列（白名单外）
-	KindDropAutoInc    = "drop_autoinc"    // 去除自增（主键变更前置，白名单外）
-	KindPKChange       = "pk_change"       // 主键变更（白名单外）
-	KindRestoreAutoInc = "restore_autoinc" // 恢复自增（主键变更后置，白名单外）
-	KindTableComment   = "table_comment"   // 表注释（白名单）
-	KindCreateTable    = "create_table"    // 建表（白名单）
+	KindAddColumn      = "add_column"       // 加列（白名单）
+	KindModifySafe     = "modify_safe"      // 列安全属性：扩容/默认值/可空/注释（白名单）
+	KindModifyColumn   = "modify_column"    // 列类型变更/缩容（白名单外）
+	KindRenameColumn   = "rename_column"    // 列改名：按位置+类型推断（白名单外）
+	KindDropColumn     = "drop_column"      // 删列（白名单外）
+	KindDropAutoInc    = "drop_autoinc"     // 去除自增（主键变更前置，白名单外）
+	KindPKChange       = "pk_change"        // 主键变更（白名单外）
+	KindRestoreAutoInc = "restore_autoinc"  // 恢复自增（主键变更后置，白名单外）
+	KindTableComment   = "table_comment"    // 表注释（白名单）
+	KindCreateTable    = "create_table"     // 建表（白名单）
+	KindAddUniqueIndex = "add_unique_index" // 补建唯一索引（白名单外；2026-11-10 重启拒启陷阱修复）
+	KindDropIndex      = "drop_index"       // 删目标多余唯一索引（白名单外）
 )
 
 // ColDef 源/目标列的完整定义（生成/比对 DDL 用）。
@@ -119,6 +123,7 @@ type tableDef struct {
 	Cols    []ColDef // 按 ORDINAL_POSITION 有序
 	PK      []string
 	Comment string
+	Unique  []model.UniqueIndex // 唯一索引（不含 PRIMARY；签名比对用）
 }
 
 // diffDefs 纯函数：源/目标定义 → 全量对账语句（可单测；不触库）。
@@ -239,6 +244,36 @@ func diffDefs(src, tgt *tableDef, tgtSchema, table string) *DiffResult {
 			fmt.Sprintf("删列 %s（源端已不存在）", t.Name), false)
 	}
 
+	// ── 唯一索引（2026-11-10 重启拒启陷阱修复：源端 ADD UNIQUE INDEX 若不参与
+	// 对账，目标永远缺失 → 下次启动被 VerifyTargetTable fail-fast 拒启。签名比对
+	// 同启动核对口径；非白名单——大表建索引可能耗时，挂起审批执行。表达式索引
+	// 无法生成语句（启动核对同样拒绝），跳过生成由重启核对兜底）──
+	if !uniqueSameSet(src.Unique, tgt.Unique) {
+		tgtSig := map[string]bool{}
+		for _, idx := range tgt.Unique {
+			tgtSig[uniqueIndexSignature(idx)] = true
+		}
+		srcSig := map[string]bool{}
+		for _, idx := range src.Unique {
+			srcSig[uniqueIndexSignature(idx)] = true
+		}
+		for _, idx := range src.Unique {
+			if tgtSig[uniqueIndexSignature(idx)] || hasExpressionPart(idx) {
+				continue
+			}
+			add(alter("ADD UNIQUE INDEX %s (%s)", quote(idx.Name), indexPartsSQL(idx)),
+				KindAddUniqueIndex,
+				"补建唯一索引 "+idx.Name+" "+describeUniqueIndex(idx)+"（源端已建）", false)
+		}
+		for _, idx := range tgt.Unique {
+			if srcSig[uniqueIndexSignature(idx)] || hasExpressionPart(idx) {
+				continue
+			}
+			add(alter("DROP INDEX %s", quote(idx.Name)), KindDropIndex,
+				"删目标多余唯一索引 "+idx.Name+" "+describeUniqueIndex(idx)+"（源端已删）", false)
+		}
+	}
+
 	// ── 表注释 ──
 	if src.Comment != tgt.Comment {
 		add(alter("COMMENT='%s'", strings.ReplaceAll(src.Comment, "'", "''")),
@@ -251,7 +286,8 @@ func diffDefs(src, tgt *tableDef, tgtSchema, table string) *DiffResult {
 		for _, c := range src.PK {
 			newPK[c] = true
 		}
-		// 前置：旧主键列含自增 → 先去掉（MySQL 不允许对自增列 DROP PRIMARY KEY）
+		// 前置：旧主键列含自增且退出新主键 → 先去掉（MySQL 要求自增列恒为键；
+		// 单独 DROP PRIMARY KEY 会对仍带 AUTO_INCREMENT 的列报 1075）
 		for _, pkc := range tgt.PK {
 			tc, ok := tgtByName[pkc]
 			if !ok || !tc.AutoInc || newPK[pkc] {
@@ -262,25 +298,37 @@ func diffDefs(src, tgt *tableDef, tgtSchema, table string) *DiffResult {
 			add(alter("MODIFY COLUMN %s", colDefSQL(noAI)), KindDropAutoInc,
 				fmt.Sprintf("列 %s 去除 AUTO_INCREMENT（旧主键列退出主键前置）", pkc), false)
 		}
-		if len(tgt.PK) > 0 {
+		// DROP+ADD 必须合并为单条 ALTER：AUTO_INCREMENT 列即使保留在新主键里，
+		// 分开执行 DROP PRIMARY KEY 的瞬间自增列无键 → ERROR 1075（原子子句
+		// 列表以语句终态校验，2026-11-10 review 修复）
+		if len(tgt.PK) > 0 && len(src.PK) > 0 {
+			pqs := make([]string, 0, len(src.PK))
+			for _, p := range src.PK {
+				pqs = append(pqs, quote(p))
+			}
+			add(alter("DROP PRIMARY KEY, ADD PRIMARY KEY (%s)", strings.Join(pqs, ",")),
+				KindPKChange,
+				"主键变更 ["+strings.Join(tgt.PK, ",")+"] → ["+strings.Join(src.PK, ",")+"]（单条原子 ALTER）",
+				false)
+		} else if len(tgt.PK) > 0 {
 			add(alter("DROP PRIMARY KEY"), KindPKChange,
-				"删旧主键 ["+strings.Join(tgt.PK, ",")+"]", false)
-		}
-		if len(src.PK) > 0 {
+				"删主键 ["+strings.Join(tgt.PK, ",")+"]（源端无主键）", false)
+		} else if len(src.PK) > 0 {
 			pqs := make([]string, 0, len(src.PK))
 			for _, p := range src.PK {
 				pqs = append(pqs, quote(p))
 			}
 			add(alter("ADD PRIMARY KEY (%s)", strings.Join(pqs, ",")), KindPKChange,
-				"建新主键 ["+strings.Join(src.PK, ",")+"]", false)
-			// 后置：新主键列在源端是自增而目标不是 → 恢复自增（自增列必须是键的一部分）
-			for _, pkc := range src.PK {
-				sc := srcByName[pkc]
-				tc, ok := tgtByName[pkc]
-				if ok && sc.AutoInc && !tc.AutoInc {
-					add(alter("MODIFY COLUMN %s", colDefSQL(sc)), KindRestoreAutoInc,
-						fmt.Sprintf("列 %s 恢复 AUTO_INCREMENT（随源端定义）", pkc), false)
-				}
+				"建主键 ["+strings.Join(src.PK, ",")+"]", false)
+		}
+		// 后置：新主键列在源端是自增而目标不是 → 恢复自增（此时新主键已就位，
+		// 自增列已是键的一部分，单独 MODIFY 合法）
+		for _, pkc := range src.PK {
+			sc := srcByName[pkc]
+			tc, ok := tgtByName[pkc]
+			if ok && sc.AutoInc && !tc.AutoInc {
+				add(alter("MODIFY COLUMN %s", colDefSQL(sc)), KindRestoreAutoInc,
+					fmt.Sprintf("列 %s 恢复 AUTO_INCREMENT（随源端定义）", pkc), false)
 			}
 		}
 	}
@@ -311,6 +359,36 @@ func countWhitelisted(stmts []DDLStmt) int {
 		}
 	}
 	return n
+}
+
+// uniqueSameSet 两端唯一索引签名集合是否一致（顺序无关）。
+func uniqueSameSet(a, b []model.UniqueIndex) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	set := map[string]bool{}
+	for _, idx := range a {
+		set[uniqueIndexSignature(idx)] = true
+	}
+	for _, idx := range b {
+		if !set[uniqueIndexSignature(idx)] {
+			return false
+		}
+	}
+	return true
+}
+
+// indexPartsSQL 索引列清单 SQL（带前缀长度：col / col(8)）。
+func indexPartsSQL(idx model.UniqueIndex) string {
+	parts := make([]string, len(idx.Parts))
+	for i, p := range idx.Parts {
+		if p.PrefixLength > 0 {
+			parts[i] = fmt.Sprintf("`%s`(%d)", strings.ReplaceAll(p.Column, "`", "``"), p.PrefixLength)
+		} else {
+			parts[i] = "`" + strings.ReplaceAll(p.Column, "`", "``") + "`"
+		}
+	}
+	return strings.Join(parts, ",")
 }
 
 // ApplyTargetDDL 执行目标端 DDL（每条 60s 超时，08 §3：超时 → 调用方 pause）。
@@ -376,6 +454,39 @@ func loadTableDef(ctx context.Context, db *sql.DB, schemaName, table string) (*t
 		def.PK = append(def.PK, name)
 	}
 
+	// 唯一索引（不含 PRIMARY——主键单独对账；启动核对 VerifyTargetTable 同口径）
+	ixRows, err := db.QueryContext(ctx, `SELECT INDEX_NAME, COLUMN_NAME, SUB_PART
+	       FROM information_schema.STATISTICS
+	       WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND NON_UNIQUE = 0 AND INDEX_NAME <> 'PRIMARY'
+	       ORDER BY INDEX_NAME, SEQ_IN_INDEX`, schemaName, table)
+	if err != nil {
+		return nil, err
+	}
+	defer ixRows.Close()
+	byName := map[string]int{}
+	for ixRows.Next() {
+		var name string
+		var column sql.NullString
+		var prefix sql.NullInt64
+		if err := ixRows.Scan(&name, &column, &prefix); err != nil {
+			return nil, err
+		}
+		i, ok := byName[name]
+		if !ok {
+			i = len(def.Unique)
+			byName[name] = i
+			def.Unique = append(def.Unique, model.UniqueIndex{Name: name})
+		}
+		part := model.UniqueIndexPart{Column: column.String, Expression: !column.Valid}
+		if prefix.Valid {
+			part.PrefixLength = int(prefix.Int64)
+		}
+		def.Unique[i].Parts = append(def.Unique[i].Parts, part)
+	}
+	if err := ixRows.Err(); err != nil {
+		return nil, err
+	}
+
 	var comment string
 	if err := db.QueryRowContext(ctx, `SELECT TABLE_COMMENT FROM information_schema.TABLES
 	       WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?`, schemaName, table).Scan(&comment); err != nil && err != sql.ErrNoRows {
@@ -436,6 +547,12 @@ func buildCreateTable(schemaName, table string, src *tableDef) string {
 			pqs = append(pqs, quote(p))
 		}
 		fmt.Fprintf(&b, ", PRIMARY KEY (%s)", strings.Join(pqs, ","))
+	}
+	for _, idx := range src.Unique {
+		if hasExpressionPart(idx) {
+			continue
+		}
+		fmt.Fprintf(&b, ", UNIQUE KEY %s (%s)", quote(idx.Name), indexPartsSQL(idx))
 	}
 	b.WriteString(") ENGINE=InnoDB")
 	if src.Comment != "" {

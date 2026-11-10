@@ -205,6 +205,8 @@ func (t *Transformer) convInt(meta *model.TableMeta, col *model.Column, v any) (
 	case float64: // 文本协议驱动偶发形态/类型变更间隙行（float→int DDL）：四舍五入
 		// 与 MySQL 隐式转换一致（原「仅接受整数值」会让间隙行 NOT NULL 列置 null → 1048）
 		return int64(math.Round(x)), nil
+	case float32: // FLOAT 列间隙行（go-mysql 交付 float32）
+		return int64(math.Round(float64(x))), nil
 	case string:
 		n, err := strconv.ParseInt(x, 10, 64)
 		if err != nil {
@@ -245,14 +247,25 @@ func (t *Transformer) convUint(meta *model.TableMeta, col *model.Column, v any) 
 		}
 		return uint64(n), nil
 	case float64:
-		if x >= 0 && x == float64(uint64(x)) {
-			return uint64(x), nil
+		// 类型变更间隙行：四舍五入 + 非负校验（MySQL 隐式转换语义）
+		if r := math.Round(x); r >= 0 {
+			return uint64(r), nil
 		}
-		return t.fail(meta, col, catUnsignedInt, ReasonParseUint, fmt.Errorf("float64 非非负整数值"))
+		return t.fail(meta, col, catUnsignedInt, ReasonParseUint, fmt.Errorf("float64 负值 %v 入无符号列", x))
+	case float32:
+		if r := math.Round(float64(x)); r >= 0 {
+			return uint64(r), nil
+		}
+		return t.fail(meta, col, catUnsignedInt, ReasonParseUint, fmt.Errorf("float32 负值 %v 入无符号列", x))
 	case string:
 		n, err := strconv.ParseUint(x, 10, 64)
 		if err == nil {
 			return n, nil
+		}
+		// 类型变更间隙行：decimal 文本（"3.50"）入无符号列——ParseUint 拒绝小数点，
+		// 按数值 ParseFloat + MySQL 四舍五入语义收编（超出 uint64 的走下方越界兜底）
+		if f, ferr := strconv.ParseFloat(x, 64); ferr == nil && f >= 0 && f < uint64Overflow {
+			return uint64(math.Round(f)), nil
 		}
 		// 04 §7 兜底：BIGINT UNSIGNED 超出 uint64（理论不可达，防御文本路径）→ 原样字符串（decimal 语义）
 		if numErr(err) {
@@ -263,6 +276,9 @@ func (t *Transformer) convUint(meta *model.TableMeta, col *model.Column, v any) 
 		n, err := strconv.ParseUint(string(x), 10, 64)
 		if err == nil {
 			return n, nil
+		}
+		if f, ferr := strconv.ParseFloat(string(x), 64); ferr == nil && f >= 0 && f < uint64Overflow {
+			return uint64(math.Round(f)), nil
 		}
 		if numErr(err) {
 			return string(x), nil
@@ -633,6 +649,10 @@ func narrowIntFloat(v any) (float64, bool) {
 	}
 	return 0, false
 }
+
+// uint64Overflow 2^64（float64 精确可表示）：ParseFloat 兜底收编无符号列的
+// 上界——超出即维持越界兜底语义（原样字符串），防止回绕成错误值。
+const uint64Overflow = 18446744073709551616.0
 
 // ── 辅助 ─────────────────────────────────────────────────────────────
 

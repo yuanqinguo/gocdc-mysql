@@ -12,6 +12,13 @@ import (
 var ddlRefRe = regexp.MustCompile(
 	"(?is)^\\s*(?:ALTER|CREATE|DROP|TRUNCATE|RENAME)\\s+TABLE\\s+(?:IF\\s+(?:NOT\\s+)?EXISTS\\s+)?([\\w$.`\"]+)")
 
+// ddlIdxRe 索引 DDL 的表引用（2026-11-10）：CREATE [UNIQUE|FULLTEXT|SPATIAL]
+// INDEX name ON tbl(...) / DROP INDEX name ON tbl——不匹配表正则，缺了会掉进
+// 「无法定位目标表」pause → approve 复验按 ErrSourceTableGone 过期放行，
+// 索引对账（重启拒启陷阱修复）根本接不到该事件。
+var ddlIdxRe = regexp.MustCompile(
+	"(?is)^\\s*(?:CREATE\\s+(?:UNIQUE\\s+|FULLTEXT\\s+|SPATIAL\\s+)?INDEX\\s+[\\w$`\".]+|DROP\\s+INDEX\\s+[\\w$`\".]+)\\s+ON\\s+([\\w$.`\"]+)")
+
 // ddlTarget 从 DDL 文本解析目标表（schema 可空 = 语句未限定，用会话默认库）。
 // 库名允许点（`edu.mall.admin`.users——多源库按 . 聚合命名，schemaRe 同语义）：
 // 带点库名的首个点不得当库名分隔符，否则解析出 schema=edu/table=mall 被
@@ -23,6 +30,9 @@ var ddlRefRe = regexp.MustCompile(
 //     三段以上属非法输入 → 解析失败 pause 兜底）
 func ddlTarget(query, defaultSchema string) (schema, table string) {
 	m := ddlRefRe.FindStringSubmatch(query)
+	if m == nil {
+		m = ddlIdxRe.FindStringSubmatch(query)
+	}
 	if m == nil {
 		return "", ""
 	}

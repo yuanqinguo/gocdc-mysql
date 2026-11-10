@@ -23,8 +23,13 @@ import (
 // 寻址键唯一覆盖、exclude/mask 撞唯一键）；核对清单来自组形态白名单（表清单
 // 编译期静态可知，见下方遍历）。srcDB 形参当前未消费，保留签名以免牵动调用方。
 // 多源：逐源执行（PRD 05 §1，失败只停该源）。
+//
+// pendingDDL（"db.table" 小写集合）：有挂起审批记录的表——源已变更、目标等
+// 审批是设计内中间态，其核对错误降级为告警（管线重放会停回同一审批，approve
+// 后自动对齐；fail-fast 会让挂起等审批期间的重启永远起不来，2026-11-10 修复）。
 func verifyTargetTables(ctx context.Context, srcDB *sql.DB, sm *schema.Manager,
-	rules *pipeline.CompiledRules, spec *config.SourceSpec, msink *mysqlsink.Sink) error {
+	rules *pipeline.CompiledRules, spec *config.SourceSpec, msink *mysqlsink.Sink,
+	pendingDDL map[string]bool) error {
 
 	type schemaTable struct{ schema, table string }
 	var tables []schemaTable
@@ -72,7 +77,14 @@ func verifyTargetTables(ctx context.Context, srcDB *sql.DB, sm *schema.Manager,
 		}
 		res := mysqlsink.VerifyTargetTable(ctx, msink.DB(), targetDB, meta,
 			rule.ExcludeColumns, maskCols, rule.OrderByColumn)
-		errs = append(errs, res.Errors...)
+		if pendingDDL[strings.ToLower(t.schema+"."+t.table)] && len(res.Errors) > 0 {
+			// 挂起审批中的表：结构差异为设计内中间态，降级告警（重放停回审批）
+			for _, e := range res.Errors {
+				warns = append(warns, e+"（该表有 pending DDL 审批——差异属预期中间态，审批后自动对齐）")
+			}
+		} else {
+			errs = append(errs, res.Errors...)
+		}
 		warns = append(warns, res.Warnings...)
 		checked++
 	}

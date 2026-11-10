@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -80,6 +81,11 @@ type DDLHooks struct {
 	DiffTarget func(ctx context.Context, schema, table string) (*TargetDiff, error)
 	// ApplyTarget 执行目标端 DDL（08 §3：60s 超时由实现内兜底）。
 	ApplyTarget func(ctx context.Context, stmts []string) error
+	// TruncateTarget 目标端数据清空（TRUNCATE 镜像专用，2026-11-10 用户纠偏）：
+	// TRUNCATE 不产生行事件（被清的行永无 DELETE 事件）且结构 diff 对数据无感知
+	// ——数据面镜像必须显式执行目标端 TRUNCATE。nil = 纯 MQ 下游/未装配，
+	// approve 时目标数据须人工清空（日志告警）。
+	TruncateTarget func(ctx context.Context, schema, table string) error
 	// Gate 审批 gate（etcd events/ddl）；nil = pause 直接停管线。
 	Gate DDLGate
 
@@ -393,6 +399,23 @@ func (w *Worker) handleDDL(ctx context.Context, u *EventUnit) error {
 		policy = rule.DDLPolicy
 	}
 
+	// TRUNCATE 拦截（2026-11-10 review + 用户纠偏）：结构 diff 恒为空（清数据不改
+	// 结构）→ auto 会静默 ack 而目标数据永远留存 = 静默分歧；且 TRUNCATE 不产生
+	// 行事件（被清的行永无 DELETE）、自增重置后新行主键复用 → skip/放行都必然
+	// 永久分歧。一律挂起人工决策：
+	//   approve = 系统在目标端执行 TRUNCATE 镜像（人工确认镜像源端清空）；
+	//   skip    = 保守选择，目标保留旧数据副本（如源库误清时），差异人工处理。
+	if uq := strings.ToUpper(strings.TrimSpace(u.Query)); strings.HasPrefix(uq, "TRUNCATE") && policy != "ignore" {
+		rec0 := DDLRecord{
+			ID:     DDLRecordID(schemaName, tableName, u.Pos.Name, u.Pos.Pos),
+			Schema: schemaName, Table: tableName,
+			SQL: u.Query, Position: fmt.Sprintf("%s:%d", u.Pos.Name, u.Pos.Pos),
+			Policy: policy, Source: w.sourceID,
+		}
+		return w.pauseOnDDL(ctx, u, rec0, schemaName, tableName,
+			"TRUNCATE：approve=系统同步清空目标表数据（镜像源端）；skip=目标保留旧数据副本（永久差异，人工处理）")
+	}
+
 	if _, rerr := w.schemaMgr.Refresh(ctx, schemaName, tableName); rerr != nil {
 		// 表被 DROP 等：结构刷新失败按 pause 人工介入，绝不静默跳过
 		w.log.Warn("DDL 后源表结构刷新失败", zap.Error(rerr),
@@ -430,6 +453,7 @@ func (w *Worker) handleDDL(ctx context.Context, u *EventUnit) error {
 		//（非白名单残差）交 pauseOnDDL 由 approve 全量执行——approve 后同样
 		// target==meta==live，行事件绝对安全。
 		converged, gerr := false, error(nil)
+		applied := 0 // 累计执行语句数（审计 note）
 		for i := 0; i < 10; i++ {
 			diff, err := hooks.DiffTarget(ctx, schemaName, tableName)
 			if err != nil {
@@ -459,6 +483,7 @@ func (w *Worker) handleDDL(ctx context.Context, u *EventUnit) error {
 			if err := hooks.ApplyTarget(ctx, diff.AutoStmts); err != nil {
 				return fmt.Errorf("pipeline: 目标 DDL 执行失败 %s.%s（pause 人工处理）: %w", schemaName, tableName, err)
 			}
+			applied += len(diff.AutoStmts)
 			// 对账推进目标库后原子刷新行结构缓存：meta 跟上 live，间隙行按
 			// 终态列名寻址（追加式变更位置对齐正确；目标库恒 ⊇ 写入列集）
 			if _, rerr := w.schemaMgr.Refresh(ctx, schemaName, tableName); rerr != nil {
@@ -475,7 +500,8 @@ func (w *Worker) handleDDL(ctx context.Context, u *EventUnit) error {
 				zap.String("schema", schemaName), zap.String("table", tableName))
 			return w.pauseOnDDL(ctx, u, rec, schemaName, tableName, "DDL 收敛循环超限（源库持续变更）")
 		}
-		w.recordDDL(ctx, rec, DecisionSynced, "auto 白名单同步（收敛）")
+		w.recordDDL(ctx, rec, DecisionSynced,
+			fmt.Sprintf("auto 白名单同步（收敛，执行 %d 条）", applied))
 		w.log.Info("DDL 自动同步完成（target==live 收敛）",
 			zap.String("schema", schemaName), zap.String("table", tableName))
 		if w.forceSave != nil {
@@ -498,6 +524,12 @@ func (w *Worker) recordDDL(ctx context.Context, rec DDLRecord, status, note stri
 	if err := w.ddlHooks.Gate.Record(ctx, rec); err != nil {
 		w.log.Warn("DDL 记录写入失败", zap.Error(err), zap.String("id", rec.ID))
 	}
+}
+
+// isTruncateQuery 语句是否为 TRUNCATE（大小写不敏感；worker.go 的 TRUNCATE
+// 拦截与 approve 镜像分支共用同一判定）。
+func isTruncateQuery(q string) bool {
+	return strings.HasPrefix(strings.ToUpper(strings.TrimSpace(q)), "TRUNCATE")
 }
 
 // pauseOnDDL 暂停等待人工决策（08 §5 A/C 流程）：位点固化 → 写 pending →
@@ -556,6 +588,21 @@ func (w *Worker) pauseOnDDL(ctx context.Context, u *EventUnit, rec DDLRecord, sc
 		if settled {
 			// 断点续跑放行：目标端动作不在重放中执行（见上方注释）
 			w.log.Info("DDL approve 决策（断点续跑）按现状继续", zap.String("id", rec.ID))
+		} else if isTruncateQuery(rec.SQL) {
+			// TRUNCATE 特例（2026-11-10 用户纠偏）：结构 diff 对数据无感知，
+			// 收敛循环必得「无差异」而跳过目标端动作——数据面镜像必须显式
+			// 执行目标端 TRUNCATE（人工批准 = 确认镜像源端清空）。
+			if hooks != nil && hooks.TruncateTarget != nil {
+				if terr := hooks.TruncateTarget(ctx, schemaName, tableName); terr != nil {
+					return fmt.Errorf("pipeline: 目标端 TRUNCATE 执行失败 %s.%s（人工清空目标表后重启，重放按既有决策放行）: %w",
+						schemaName, tableName, terr)
+				}
+				w.log.Info("DDL approve：目标端已同步 TRUNCATE（数据镜像）",
+					zap.String("id", rec.ID), zap.String("schema", schemaName), zap.String("table", tableName))
+			} else {
+				w.log.Warn("DDL approve：目标端 TRUNCATE 执行器未装配（纯 MQ 下游），目标数据须人工清空",
+					zap.String("id", rec.ID), zap.String("schema", schemaName), zap.String("table", tableName))
+			}
 		} else if hooks == nil || hooks.DiffTarget == nil || hooks.ApplyTarget == nil {
 			// 流程 B：无自动执行器（ddl_sync=false）→ 人工已在目标端自行修改
 			w.log.Info("DDL 决策 approve（无自动执行器，按新 schema 继续）", zap.String("id", rec.ID))

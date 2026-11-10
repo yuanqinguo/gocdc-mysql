@@ -57,6 +57,24 @@ null → NOT NULL 列 1048 熔断（可见暂停，非静默；恢复见 RUNBOOK
 加列/改名/类型变更的 burst 已全场景安全（E2E 27 断言 + 集成回归覆盖）。运维
 规避：DDL 逐条间隔执行（>1s）或 burst 内避免 `AFTER`/`FIRST`。
 
+**2026-11-10 二轮 review 补强（E2E 第二套件 32 断言验证）**：
+- 主键变更 DROP+ADD 合并为**单条原子 ALTER**（分开执行对 AUTO_INCREMENT 列报
+  1075）；自增列退出主键先 MODIFY 去自增，新主键就位后按源端定义恢复。
+- **唯一索引参与对账**（签名比对同启动核对口径）：源端 ADD/DROP UNIQUE INDEX
+  生成补建/删除语句（白名单外挂起审批）——否则目标永远缺失，下次启动被
+  VerifyTargetTable fail-fast 拒启。表达式索引不生成语句（启动核对同样拒绝）。
+- `CREATE/DROP INDEX ... ON t(...)` 语句形态纳入 barrier 表定位（此前掉进
+  「无法定位」pause → 被当 ErrSourceTableGone 过期放行，索引对账接不到事件）。
+- **TRUNCATE 一律挂起**（结构 diff 对数据无感知，静默 ack = 目标数据永久分歧；
+  且 TRUNCATE 不产生行事件、自增重置后主键复用——放行/skip 都无法靠 upsert 收敛）：
+  **approve = 系统在目标端同步执行 TRUNCATE 镜像**（人工批准=确认镜像源端清空，
+  2026-11-10 用户纠偏语义）；skip = 目标保留旧数据副本（源库疑似误清的保守
+  选择），差异人工处理。
+- 启动核对感知 **pending DDL**：有挂起审批记录的表结构差异降级告警——挂起等
+  审批期间节点重启不再被 fail-fast 拒启（管线重放停回同一审批，事件 ID 不变）。
+- 值转换兼容补齐：float32/带小数点文本 → int/unsigned int（四舍五入，MySQL
+  隐式转换语义；uint64 越界仍走原样字符串兜底）。
+
 ## 3. Barrier 协议（新旧 schema 原子切换）
 
 DDL 必须满足：**该表在 DDL 之前的事件用旧列信息转换，之后的事件用新列信息，两者互不交错**。

@@ -10,8 +10,11 @@ import (
 	"strings"
 	"time"
 
+	"go.uber.org/zap"
+
 	"gocdc/internal/config"
 	"gocdc/internal/etcdx"
+	"gocdc/internal/logging"
 	"gocdc/internal/metrics"
 	"gocdc/internal/pipeline"
 	"gocdc/internal/schema"
@@ -169,10 +172,26 @@ func buildComponents(ctx context.Context, cfg *config.Config, spec *config.Sourc
 		return nil, nil, fmt.Errorf("下游目标不可达: %w", err)
 	}
 
+	// ── DDL 审批 gate（先于启动核对构造：核对需感知 pending 记录）──
+	ddlGate := pipeline.NewDDLGate(kv, prefix+"/events/ddl")
+
 	// ── 目标表结构核对（05 §5.1.4 / 10 §3 启动 fail-fast）：错配置在启动时
 	// 暴露（缺列/寻址键不覆盖/exclude 撞唯一键），而不是首条事件运行期炸成
-	// PAUSED。同时预热全部规则表结构（schema.Preload 语义）──
-	if err := verifyTargetTables(ctx, srcDB, schemaMgr, rules, spec, msink); err != nil {
+	// PAUSED。同时预热全部规则表结构（schema.Preload 语义）。
+	// 有 pending DDL 记录的表降级为告警（2026-11-10 挂起中重启拒启修复）：
+	// 源已变更、目标等审批是设计内中间态——管线重放会停回同一审批，approve
+	// 后自动对齐；若在此 fail-fast，挂起等审批期间节点重启就永远起不来 ──
+	pendingTables := map[string]bool{} // "db.table" 小写
+	if recs, err := ddlGate.PendingByTable(ctx, "", ""); err != nil {
+		logging.L().Warn("启动核对读取 pending DDL 失败（不跳过任何表核对）", zap.Error(err))
+	} else {
+		for _, r := range recs {
+			if r.Table != "" {
+				pendingTables[strings.ToLower(r.Schema)+"."+strings.ToLower(r.Table)] = true
+			}
+		}
+	}
+	if err := verifyTargetTables(ctx, srcDB, schemaMgr, rules, spec, msink, pendingTables); err != nil {
 		return nil, nil, err
 	}
 
@@ -181,7 +200,6 @@ func buildComponents(ctx context.Context, cfg *config.Config, spec *config.Sourc
 	// 纯 MQ 下游（校验层已拒 ddl_sync+mysql 未启用组合）双条件防御。
 	// DiffResult → TargetDiff 映射：全量对账语句（approve 人工批准后执行）+
 	// 白名单子集（auto 自动执行）——ErrSourceTableGone 经 err 透传给 worker ──
-	ddlGate := pipeline.NewDDLGate(kv, prefix+"/events/ddl")
 	ddlHooks := &pipeline.DDLHooks{Gate: ddlGate}
 	if spec.Targets.MySQL.Enabled && spec.Targets.MySQL.DDLSync {
 		ddlHooks.DiffTarget = func(ctx context.Context, schemaName, table string) (*pipeline.TargetDiff, error) {
@@ -198,6 +216,20 @@ func buildComponents(ctx context.Context, cfg *config.Config, spec *config.Sourc
 		}
 		ddlHooks.ApplyTarget = func(ctx context.Context, stmts []string) error {
 			return mysqlsink.ApplyTargetDDL(ctx, msink.DB(), stmts, 60*time.Second)
+		}
+		// TRUNCATE 镜像（2026-11-10 用户纠偏）：approve = 目标端同步清空。
+		// 目标库名按规则解析（表级覆盖 > 组级 > 全局 > 同名）——源端语句的
+		// schema 限定不能照抄，target_database 不同名的场景必须在此解析。
+		ddlHooks.TruncateTarget = func(ctx context.Context, schemaName, table string) error {
+			tdb := targetDB(schemaName, table)
+			stmt := fmt.Sprintf("TRUNCATE TABLE `%s`.`%s`",
+				strings.ReplaceAll(tdb, "`", "``"), strings.ReplaceAll(table, "`", "``"))
+			tctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+			defer cancel()
+			if _, err := msink.DB().ExecContext(tctx, stmt); err != nil {
+				return fmt.Errorf("ddlgen: 执行目标端 %s: %w", stmt, err)
+			}
+			return nil
 		}
 	}
 

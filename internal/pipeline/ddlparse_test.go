@@ -44,3 +44,21 @@ func TestDDlTarget(t *testing.T) {
 		})
 	}
 }
+
+func TestDDLTarget_IndexForms(t *testing.T) {
+	cases := []struct {
+		name, query, defSchema, wantSchema, wantTable string
+	}{
+		{"CREATE UNIQUE INDEX", "CREATE UNIQUE INDEX uq_code ON shop.orders (order_code)", "defdb", "shop", "orders"},
+		{"CREATE INDEX", "create index idx_x on t9 (a)", "defdb", "defdb", "t9"},
+		{"CREATE UNIQUE INDEX 带点库名", "CREATE UNIQUE INDEX uq ON `edu.mall.admin`.users (uid)", "defdb", "edu.mall.admin", "users"},
+		{"DROP INDEX", "DROP INDEX uq_code ON shop.orders", "defdb", "shop", "orders"},
+		{"CREATE FULLTEXT INDEX", "CREATE FULLTEXT INDEX ft_x ON shop.orders (remark)", "defdb", "shop", "orders"},
+	}
+	for _, c := range cases {
+		s, tb := ddlTarget(c.query, c.defSchema)
+		if s != c.wantSchema || tb != c.wantTable {
+			t.Errorf("%s: ddlTarget(%q) = (%q,%q) 期望 (%q,%q)", c.name, c.query, s, tb, c.wantSchema, c.wantTable)
+		}
+	}
+}

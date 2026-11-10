@@ -234,3 +234,54 @@ func TestHandleDDL_AutoWhitelistedExecutesOnlyWhitelist(t *testing.T) {
 		t.Fatal("白名单语句未执行")
 	}
 }
+
+// TestHandleDDL_TruncateMirror：TRUNCATE approve = 目标端同步清空（数据镜像，
+// 2026-11-10 用户纠偏）；skip = 目标数据不动。
+func TestHandleDDL_TruncateMirror(t *testing.T) {
+	run := func(t *testing.T, decision string) (called int, err error) {
+		gate := newFakeDDLGate()
+		var mu sync.Mutex
+		n := 0
+		hooks := &DDLHooks{Gate: gate,
+			TruncateTarget: func(_ context.Context, _, _ string) error {
+				mu.Lock()
+				n++
+				mu.Unlock()
+				return nil
+			}}
+		// TRUNCATE 分支不触 DiffTarget（结构 diff 对数据无感知）；只装 ApplyTarget
+		// 防御误走（若走到即 panic 揭示分支错误）
+		hooks.ApplyTarget = func(_ context.Context, _ []string) error {
+			t.Error("TRUNCATE 不应走 diff/apply 收敛循环")
+			return nil
+		}
+		w := approveTestWorker(t, "auto", hooks.Gate, nil, nil)
+		w.ddlHooks = hooks
+		u := &EventUnit{Seq: 11, Kind: UnitDDL, Schema: "db1", Table: "t1",
+			Query: "TRUNCATE TABLE db1.t1", Pos: model.Position{Name: "f", Pos: 600}}
+		done := make(chan error, 1)
+		go func() { done <- w.handleDDL(context.Background(), u) }()
+		select {
+		case <-gate.recorded:
+		case <-time.After(2 * time.Second):
+			t.Fatal("TRUNCATE 应挂起")
+		}
+		gate.decided <- decision
+		select {
+		case err = <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("未返回")
+		}
+		mu.Lock()
+		called = n
+		mu.Unlock()
+		return called, err
+	}
+
+	if called, err := run(t, DecisionApprove); err != nil || called != 1 {
+		t.Fatalf("approve 应执行目标端 TRUNCATE 恰一次: called=%d err=%v", called, err)
+	}
+	if called, err := run(t, DecisionSkip); err != nil || called != 0 {
+		t.Fatalf("skip 不应清目标数据: called=%d err=%v", called, err)
+	}
+}
