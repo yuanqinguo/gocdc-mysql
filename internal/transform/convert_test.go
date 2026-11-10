@@ -45,7 +45,17 @@ func TestConvert_Golden(t *testing.T) {
 		{"signed/uint64输入小值", oneCol("c", model.TypeInt, nil), uint64(7), int64(7), nil},
 		{"signed/float整数值防御", oneCol("c", model.TypeInt, nil), float64(3), int64(3), nil},
 		{"signed/坏文本→null", oneCol("c", model.TypeInt, nil), "abc", nil, nil},
-		{"signed/非整数float→null", oneCol("c", model.TypeInt, nil), float64(3.5), nil, nil},
+		// 非整 float → 四舍五入（类型变更间隙行 int←float DDL，MySQL 隐式转换语义；
+		// 旧「置 null」会让 NOT NULL 列 1048 熔断，2026-11-09 改）
+		{"signed/非整数float→round", oneCol("c", model.TypeInt, nil), float64(3.5), int64(4), nil},
+		{"signed/decimal文本→round（间隙行）", oneCol("c", model.TypeInt, nil), "3.50", int64(4), nil},
+		{"signed/decimal字节→round（间隙行）", oneCol("c", model.TypeInt, nil), []byte("2.49"), int64(2), nil},
+		{"signed/int64→decimal列（间隙行）", oneCol("c", model.TypeDecimal, nil), int64(3), "3", nil},
+		{"signed/uint64→decimal列（间隙行）", oneCol("c", model.TypeDecimal, nil), uint64(9), "9", nil},
+		{"signed/int64→float列（间隙行）", oneCol("c", model.TypeDouble, nil), int64(3), float64(3), nil},
+		{"signed/int64→varchar列（间隙行）", oneCol("c", model.TypeVarchar, nil), int64(42), "42", nil},
+		{"signed/float64→varchar列（间隙行）", oneCol("c", model.TypeVarchar, nil), float64(3.5), "3.5", nil},
+		{"signed/int64→varbinary列（间隙行）", oneCol("c", model.TypeVarbinary, nil), int64(7), []byte("7"), nil},
 		{"signed/nil→nil", oneCol("c", model.TypeInt, nil), nil, nil, nil},
 
 		// ── 无符号整型（04 §7 行 2：溢出不置 NULL，按位宽回绕还原）──

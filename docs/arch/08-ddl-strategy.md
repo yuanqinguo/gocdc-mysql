@@ -21,11 +21,41 @@
 | DDL | 目标端动作 | 备注 |
 |-----|-----------|------|
 | ADD COLUMN | `ALTER TABLE ... ADD COLUMN`（列定义由源 information_schema 生成，含注释） | 追加在末尾；目标列序差异用列名对齐消化（见 §4） |
-| MODIFY COLUMN 仅 varchar 长度放大 / 注释变更 | `ALTER TABLE ... MODIFY ...` | 缩小、类型变更不在白名单 |
-| ADD INDEX / ADD UNIQUE（可选开关，默认关） | 同步建索引 | 关闭时 pause |
-| CREATE TABLE（规则白名单表在目标缺失） | 建表（结构含主键/注释，`IF NOT EXISTS` 幂等） | 白名单外表的 CREATE 不产生事件（组形态无新表自动接入） |
+| MODIFY COLUMN 仅 varchar 长度放大 / 列安全属性（默认值/可空/注释） | `ALTER TABLE ... MODIFY ...` | 缩小、类型变更不在白名单 |
+| CREATE TABLE（规则白名单表在目标缺失） | 建表（结构含主键/注释/列序，`IF NOT EXISTS` 幂等） | 白名单外表的 CREATE 不产生事件（组形态无新表自动接入） |
 
-白名单外（DROP/RENAME/改主键/类型变更/charset 变更/分区变更…）→ `pause`。
+白名单外（DROP COLUMN/RENAME/改主键/类型变更/缩容…）→ `pause`。
+
+**全量对账（2026-11-09 approve 必炸陷阱修复）**：diff 引擎为**全部**差异生成可
+执行语句（白名单内外均生成，逐条带分类标记与白名单位）：
+
+- `approve`（人工批准）= 执行**全部**对账语句（含删列/改名/类型变更/缩容/主键
+  变更）→ 复验一致 → 自动恢复。旧版非白名单差异无语句可执行，approve 复验必
+  失败 fatal，且重启重放命中已决 approve 再次 fatal = 死循环；已废除。
+- `auto` = 仍只自动执行白名单子集（语义不变）；源表已删/改名走（ErrSourceTableGone）
+  按过期放行（skip + 审计），不再 fatal。
+- 列改名按「同 ORDINAL_POSITION + 同 DATA_TYPE」配对推断，生成 `CHANGE COLUMN`
+  （数据保留，改名+类型微调一条覆盖）；误配对（实为同位删+加同型）后果 = 旧值
+  残留至该行下次 upsert，审计明细逐条列出推断依据。
+- 断点续跑命中已决 approve/skip = **只放行不重执行**（重复 ALTER 必报错）；approve
+  首次执行失败后人工修复目标库，重启重放即放行，残余差异由后续 DDL diff 自愈。
+- 索引/charset/分区等列级以外的差异不参与对账（也不阻塞行同步）。
+
+**收敛循环与值域兼容（2026-11-09 E2E 三连修）**：burst 期间源库实时结构持续演进，
+单次 diff→apply 会把目标库留在中间态、行结构缓存（meta）却已刷新到终态——间隙
+行按终态列名寻址目标库没有的列 → 1054 熔断。auto/approve 路径均为
+**diff→apply→refresh 收敛循环**（≤10 轮，直至 target==live；非白名单残差转
+pause/approve 全量执行），保证行事件处理时 meta==target==live 三者一致。同时
+转换器补齐类型变更间隙行的值域兼容（raw 按写入时 TABLE_MAP 解码 vs meta 实时
+类型）：整型家族（含窄整型 int8/16/32）↔decimal/float/string/bytes、带小数点
+文本→int（四舍五入，MySQL 隐式转换语义）。
+
+**已知限制（语句级 schema 演进专项解决）**：DDL 间隔小于管线处理时延（毫秒级
+burst）**且**含中间位置列变更（`AFTER`/`FIRST` 加列、或其后的删列/改名重排）
+时，间隙行按终态列名位置对齐会错位——字符串落进数值列 → on_convert_error 置
+null → NOT NULL 列 1048 熔断（可见暂停，非静默；恢复见 RUNBOOK §5）。追加式
+加列/改名/类型变更的 burst 已全场景安全（E2E 27 断言 + 集成回归覆盖）。运维
+规避：DDL 逐条间隔执行（>1s）或 burst 内避免 `AFTER`/`FIRST`。
 
 ## 3. Barrier 协议（新旧 schema 原子切换）
 
@@ -70,13 +100,17 @@ sequenceDiagram
 
 ```text
 告警（gocdc_pipeline_paused{reason="ddl"}=1）
- → Web `GET /api/v1/ddl-events` 查看 SQL → 运维评估：
-    A. 安全 → POST /ddl/{id}/approve?confirm=true（执行目标端 DDL → 复验 → resume）
-    B. 危险 → 人工先改目标表 → approve（复验一致即 resume；不一致则拒绝）
-    C. 决定跳过 → POST /ddl/{id}/skip?confirm=true（该条 DDL 标记 ignore，审计留痕）
+ → Web `GET /api/v1/ddl-events` 查看 SQL 与差异明细 → 运维评估：
+    A. 批准 → POST /ddl/{id}/approve?confirm=true
+       （系统自动执行全部对账语句——含删列/改名/类型变更 → 复验一致 → resume）
+    B. 决定跳过 → POST /ddl/{id}/skip?confirm=true（目标保留旧结构，审计留痕）
 ```
 
 所有 DDL 事件（含决策）写入 etcd `events/ddl` 与结构化日志，Web 展示（13 文档）。
+
+多 DDL 批次语义：同一表连续多次变更（如连发 3-5 条 ALTER）时，diff 口径 =
+「源库实时结构 vs 目标」，**首个挂起事件的 approve 一次性对账全部累计差异**；
+后续 DDL 事件到达时结构已对齐，各自复验即自动通过（auto 无需再审批）。
 
 ## 6. 设计要点速览
 

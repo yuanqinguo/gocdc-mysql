@@ -464,9 +464,13 @@ sinks: { kafka: { enabled: true, topic: "cdc_custom" } }   # 对象：覆盖 top
 
 | 值 | 行为 | 适用 |
 |----|------|------|
-| `auto` | 白名单 DDL（ADD COLUMN、varchar 放大等）自动同步目标库继续跑；白名单外自动转 pause。需 `targets.mysql.ddl_sync=true` | 生产默认 |
-| `pause`（**省略时默认**） | 任何 DDL → 该表管线暂停 + 告警，人工处理后 resume | 强管控表 |
+| `auto` | 白名单 DDL（ADD COLUMN、varchar 放大、列属性/注释）自动同步目标库继续跑；白名单外（删列/改名/类型变更等）自动转 pause 等审批。需 `targets.mysql.ddl_sync=true` | 生产默认 |
+| `pause`（**省略时默认**） | 任何 DDL → 该表管线暂停 + 告警；审批 approve = 系统自动执行全部对账变更（含危险操作）后 resume | 强管控表 |
 | `ignore` | 跳过 DDL 继续跑 | 目标结构另有管理人；显式配置 |
+
+审批语义（08 §5）：approve = 系统在目标库自动执行**全部**对账语句（加列/删列/
+改名/类型变更/缩容/主键变更）并复验一致后恢复——无需人工先改目标库；同表多条
+DDL 的累计差异在首个挂起事件中一次性对账。
 
 ---
 

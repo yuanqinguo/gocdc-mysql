@@ -3,6 +3,7 @@ package transform
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 	"time"
 	"unicode/utf8"
@@ -201,20 +202,26 @@ func (t *Transformer) convInt(meta *model.TableMeta, col *model.Column, v any) (
 		return int64(x), nil
 	case uint32:
 		return int64(x), nil
-	case float64: // 文本协议驱动偶发形态：仅接受整数值
-		if x == float64(int64(x)) {
-			return int64(x), nil
-		}
-		return t.fail(meta, col, catSignedInt, ReasonParseInt, fmt.Errorf("float64 非整数值"))
+	case float64: // 文本协议驱动偶发形态/类型变更间隙行（float→int DDL）：四舍五入
+		// 与 MySQL 隐式转换一致（原「仅接受整数值」会让间隙行 NOT NULL 列置 null → 1048）
+		return int64(math.Round(x)), nil
 	case string:
 		n, err := strconv.ParseInt(x, 10, 64)
 		if err != nil {
+			// 类型变更间隙行：decimal 文本（"3.50"）入 int 列——ParseInt 拒绝小数点，
+			// 按数值 ParseFloat + MySQL 四舍五入语义收编；非数值文本维持显式失败
+			if f, ferr := strconv.ParseFloat(x, 64); ferr == nil {
+				return int64(math.Round(f)), nil
+			}
 			return t.fail(meta, col, catSignedInt, ReasonParseInt, err)
 		}
 		return n, nil
 	case []byte:
 		n, err := strconv.ParseInt(string(x), 10, 64)
 		if err != nil {
+			if f, ferr := strconv.ParseFloat(string(x), 64); ferr == nil {
+				return int64(math.Round(f)), nil
+			}
 			return t.fail(meta, col, catSignedInt, ReasonParseInt, err)
 		}
 		return n, nil
@@ -267,12 +274,19 @@ func (t *Transformer) convUint(meta *model.TableMeta, col *model.Column, v any) 
 }
 
 func (t *Transformer) convDecimal(meta *model.TableMeta, col *model.Column, v any) (any, error) {
-	// 默认 string（无损，避免 float64 精度丢失）；float 模式仅兼容旧消费方
+	// 默认 string（无损，避免 float64 精度丢失）；float 模式仅兼容旧消费方。
+	// 整型输入 = 类型变更 DDL 的间隙行（写入时 INT、meta 已刷新为 DECIMAL——
+	// raw 按写入时 TABLE_MAP 解码、meta 是实时结构）：整数→decimal 精确无损，
+	// 与 MySQL ALTER 的隐式转换一致；不支持会把 NOT NULL 列置 null → 1048 熔断。
 	if t.opts.DecimalAs == DecimalAsFloat {
 		switch x := v.(type) {
 		case float64:
 			return x, nil
 		case float32:
+			return float64(x), nil
+		case int64:
+			return float64(x), nil
+		case uint64:
 			return float64(x), nil
 		case string:
 			f, err := strconv.ParseFloat(x, 64)
@@ -287,6 +301,9 @@ func (t *Transformer) convDecimal(meta *model.TableMeta, col *model.Column, v an
 			}
 			return f, nil
 		default:
+			if f, ok := narrowIntFloat(v); ok { // 窄整型（binlog 按位宽交付 int8/16/32）
+				return f, nil
+			}
 			return t.fail(meta, col, catDecimal, ReasonUnsupported, typeErr(v))
 		}
 	}
@@ -295,11 +312,18 @@ func (t *Transformer) convDecimal(meta *model.TableMeta, col *model.Column, v an
 		return t.decimalString(meta, col, x)
 	case []byte:
 		return t.decimalString(meta, col, string(x))
+	case int64:
+		return t.decimalString(meta, col, strconv.FormatInt(x, 10)) // 整数→decimal 精确
+	case uint64:
+		return t.decimalString(meta, col, strconv.FormatUint(x, 10))
 	case float64: // 罕见：驱动已按浮点交付；无损还原为定点文本
 		return strconv.FormatFloat(x, 'f', -1, 64), nil
 	case float32:
 		return strconv.FormatFloat(float64(x), 'f', -1, 32), nil
 	default:
+		if f, ok := narrowIntFloat(v); ok { // 窄整型精确（≤2^53 浮点可表示）
+			return t.decimalString(meta, col, strconv.FormatFloat(f, 'f', -1, 64))
+		}
 		return t.fail(meta, col, catDecimal, ReasonUnsupported, typeErr(v))
 	}
 }
@@ -319,6 +343,10 @@ func (t *Transformer) convFloat(meta *model.TableMeta, col *model.Column, v any)
 		return x, nil
 	case float32:
 		return float64(x), nil
+	case int64: // 类型变更间隙行（int→float/double DDL）：精确
+		return float64(x), nil
+	case uint64:
+		return float64(x), nil
 	case string:
 		f, err := strconv.ParseFloat(x, 64)
 		if err != nil {
@@ -332,6 +360,9 @@ func (t *Transformer) convFloat(meta *model.TableMeta, col *model.Column, v any)
 		}
 		return f, nil
 	default:
+		if f, ok := narrowIntFloat(v); ok {
+			return f, nil
+		}
 		return t.fail(meta, col, category(col), ReasonUnsupported, typeErr(v))
 	}
 }
@@ -527,6 +558,7 @@ func (t *Transformer) convJSON(meta *model.TableMeta, col *model.Column, v any) 
 
 // convString 字符家族 → string。按 utf8 家族直接解码；字节不是合法 UTF-8
 // 且声明字符集非 utf8 家族时显式失败（不静默 mojibake；非 utf8 库在启动检查告警）。
+// 数值输入 = 类型变更间隙行（int/decimal→varchar DDL），按数值文本收编。
 func (t *Transformer) convString(meta *model.TableMeta, col *model.Column, v any) (any, error) {
 	var b []byte
 	switch x := v.(type) {
@@ -534,7 +566,18 @@ func (t *Transformer) convString(meta *model.TableMeta, col *model.Column, v any
 		return x, nil
 	case []byte:
 		b = x
+	case int64:
+		return strconv.FormatInt(x, 10), nil
+	case uint64:
+		return strconv.FormatUint(x, 10), nil
+	case float64:
+		return strconv.FormatFloat(x, 'f', -1, 64), nil
+	case float32:
+		return strconv.FormatFloat(float64(x), 'f', -1, 32), nil
 	default:
+		if f, ok := narrowIntFloat(v); ok {
+			return strconv.FormatFloat(f, 'f', -1, 64), nil
+		}
 		return t.fail(meta, col, catString, ReasonUnsupported, typeErr(v))
 	}
 	if utf8.Valid(b) {
@@ -549,15 +592,46 @@ func (t *Transformer) convString(meta *model.TableMeta, col *model.Column, v any
 }
 
 // convBytes 二进制家族 → []byte（MySQL sink 直接绑参；MQ 侧 UTF-8/base64 决策在消息编码）。
+// 数值输入 = 类型变更间隙行，按数值文本字节收编。
 func (t *Transformer) convBytes(meta *model.TableMeta, col *model.Column, v any) (any, error) {
 	switch x := v.(type) {
 	case []byte:
 		return x, nil
 	case string:
 		return []byte(x), nil
+	case int64:
+		return []byte(strconv.FormatInt(x, 10)), nil
+	case uint64:
+		return []byte(strconv.FormatUint(x, 10)), nil
+	case float64:
+		return []byte(strconv.FormatFloat(x, 'f', -1, 64)), nil
 	default:
+		if f, ok := narrowIntFloat(v); ok {
+			return []byte(strconv.FormatFloat(f, 'f', -1, 64)), nil
+		}
 		return t.fail(meta, col, catBytes, ReasonUnsupported, typeErr(v))
 	}
+}
+
+// narrowIntFloat 窄整型家族（go-mysql binlog 按列位宽交付：tinyint=int8、
+// smallint=int16、int=int32、mediumint=int32；uint 同理）→ float64。
+// 窄整型 ≤2^53，浮点表示精确无损。
+func narrowIntFloat(v any) (float64, bool) {
+	switch x := v.(type) {
+	case int8:
+		return float64(x), true
+	case int16:
+		return float64(x), true
+	case int32:
+		return float64(x), true
+	case uint8:
+		return float64(x), true
+	case uint16:
+		return float64(x), true
+	case uint32:
+		return float64(x), true
+	}
+	return 0, false
 }
 
 // ── 辅助 ─────────────────────────────────────────────────────────────

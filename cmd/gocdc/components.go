@@ -120,8 +120,8 @@ func buildComponents(ctx context.Context, cfg *config.Config, spec *config.Sourc
 			SendTimeout:     time.Duration(spec.Targets.Kafka.SendTimeoutMS) * time.Millisecond,
 			MaxMessageBytes: spec.Targets.Kafka.MaxMessageBytes,
 			SASL:            spec.Targets.Kafka.SASL, TLS: spec.Targets.Kafka.TLS,
-			SourceID:        spec.ID,
-			Metrics: met, TopicOverride: topicFor,
+			SourceID: spec.ID,
+			Metrics:  met, TopicOverride: topicFor,
 		})
 		if err != nil {
 			return nil, nil, err
@@ -144,7 +144,7 @@ func buildComponents(ctx context.Context, cfg *config.Config, spec *config.Sourc
 			SendTimeout:     time.Duration(spec.Targets.RocketMQ.SendTimeoutMS) * time.Millisecond,
 			SendConcurrency: spec.Targets.RocketMQ.SendConcurrency,
 			ACL:             spec.Targets.RocketMQ.ACL,
-			Metrics: met, SourceID: spec.ID, Topics: topics,
+			Metrics:         met, SourceID: spec.ID, Topics: topics,
 			TopicOverride: rmqTopicFor,
 		})
 		if err != nil {
@@ -178,16 +178,23 @@ func buildComponents(ctx context.Context, cfg *config.Config, spec *config.Sourc
 
 	// ── DDL hooks（08 §2/§3）：diff/apply 闭包（ddl_sync=true 才装配，
 	// 否则 auto 降级 pause）；审批 gate 常备。diff/apply 走 MySQL 目标连接，
-	// 纯 MQ 下游（校验层已拒 ddl_sync+mysql 未启用组合）双条件防御 ──
+	// 纯 MQ 下游（校验层已拒 ddl_sync+mysql 未启用组合）双条件防御。
+	// DiffResult → TargetDiff 映射：全量对账语句（approve 人工批准后执行）+
+	// 白名单子集（auto 自动执行）——ErrSourceTableGone 经 err 透传给 worker ──
 	ddlGate := pipeline.NewDDLGate(kv, prefix+"/events/ddl")
 	ddlHooks := &pipeline.DDLHooks{Gate: ddlGate}
 	if spec.Targets.MySQL.Enabled && spec.Targets.MySQL.DDLSync {
-		ddlHooks.DiffTarget = func(ctx context.Context, schemaName, table string) ([]string, bool, string, error) {
+		ddlHooks.DiffTarget = func(ctx context.Context, schemaName, table string) (*pipeline.TargetDiff, error) {
 			res, err := mysqlsink.DiffTargetTable(ctx, srcDB, msink.DB(), schemaName, targetDB(schemaName, table), table)
 			if err != nil {
-				return nil, false, "", err
+				return nil, err
 			}
-			return res.Stmts, res.Whitelisted, res.Summary, nil
+			return &pipeline.TargetDiff{
+				AutoStmts:   res.WhitelistedStmts(),
+				AllStmts:    res.AllStmts(),
+				Whitelisted: res.Whitelisted,
+				Summary:     res.Summary,
+			}, nil
 		}
 		ddlHooks.ApplyTarget = func(ctx context.Context, stmts []string) error {
 			return mysqlsink.ApplyTargetDDL(ctx, msink.DB(), stmts, 60*time.Second)

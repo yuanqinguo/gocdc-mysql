@@ -111,12 +111,13 @@ CREATE TABLE IF NOT EXISTS dstdb.t_alive LIKE srcdb.t_alive;`); err != nil {
 
 	ddlHooks := &DDLHooks{
 		Gate: gate,
-		DiffTarget: func(ctx context.Context, schema, table string) ([]string, bool, string, error) {
+		DiffTarget: func(ctx context.Context, schema, table string) (*TargetDiff, error) {
 			res, err := mysqlsink.DiffTargetTable(ctx, srcDB, msink.DB(), schema, "dstdb", table)
 			if err != nil {
-				return nil, false, "", err
+				return nil, err
 			}
-			return res.Stmts, res.Whitelisted, res.Summary, nil
+			return &TargetDiff{AutoStmts: res.WhitelistedStmts(), AllStmts: res.AllStmts(),
+				Whitelisted: res.Whitelisted, Summary: res.Summary}, nil
 		},
 		ApplyTarget: func(ctx context.Context, stmts []string) error {
 			return mysqlsink.ApplyTargetDDL(ctx, msink.DB(), stmts, 30*time.Second)

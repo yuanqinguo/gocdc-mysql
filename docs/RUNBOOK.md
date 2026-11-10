@@ -51,9 +51,21 @@
   切换间隙丢失不可恢复——强烈建议 GTID。
 
 ## 5. DDL 挂起处理（ddl_policy=pause / 白名单外）
-1. 告警 `gocdc_pipeline_paused{reason="ddl"}=1`；Web `GET /api/v1/ddl-events` 查看 SQL。
-2. 评估：安全 → `POST /api/v1/ddl/{id}/approve?confirm=true`（执行目标 DDL+resume）；
-   危险 → 人工改目标表后 approve（复验通过即 resume）；跳过 → skip（按新 schema 继续，审计留痕）。
+1. 告警 `gocdc_pipeline_paused{reason="ddl"}=1`；Web `GET /api/v1/ddl-events` 查看 SQL
+   与差异明细（note 列出全部待执行对账语句及分类）。
+2. 评估：approve = **系统自动在目标库执行全部对账变更**（含删列/改名/类型变更/
+   缩容/主键变更——2026-11-09 起，旧版要求人工先改目标库的行为已废除），执行
+   完成复验一致后自动恢复；跳过 → skip（目标保留旧结构，按新 schema 继续，
+   审计留痕）。注意：同一表多条 DDL 的累计差异会在**首个挂起事件**中一次性
+   对账（diff 口径 = 源库实时结构 vs 目标），后续 DDL 事件各自复验即自动通过。
+3. approve 执行失败（目标端报错）：管线停。人工修复目标库后**直接重启即可**
+   ——重放会命中既有 approve 决策直接放行（不重执行），残余差异由后续 DDL 的
+   diff 暴露并再次挂起审批，形成自愈闭环。
+4. 「DDL burst + 间隙行 1048/1054 熔断」恢复（罕见：burst < 处理时延且含
+   `AFTER`/`FIRST` 中间位置列变更，08 已知限制）：重放必然复现（meta 恒为终态、
+   间隙行按旧形态写入）。恢复路径：① 目标表该列暂改 NULLable → resume 放行该行
+   （值已错位，随后修数）→ 改回 NOT NULL；或 ② 该表 restock 重扫覆盖 + 位点
+   前提处理。预防：DDL 逐条间隔 >1s 执行。
 
 ## 6. etcd 故障
 - 单节点宕机：无影响。quorum 丢失：lease 全过期 → 全节点停管线（安全态）→

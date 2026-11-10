@@ -129,7 +129,7 @@ export function DDLPage() {
       {pendingDecision && <>
         <Callout tone={pendingDecision.decision === 'approve' ? 'warning' : 'danger'} title={pendingDecision.decision === 'approve' ? '批准语义' : '跳过语义'}>
           {pendingDecision.decision === 'approve'
-            ? '白名单内结构由系统同步；DROP、RENAME、缩容或类型变更等非白名单操作不会自动执行。请先在目标库完成相同变更，再批准以复验并恢复管线。'
+            ? '批准后系统将自动在目标库执行全部对账变更（含加列、删列、改名、类型变更、缩容、主键变更），执行完成并复验一致后自动恢复管线，无需人工改目标库。列改名按「同位置+同类型」推断，请核对展开的变更明细。'
             : '目标端将保留旧结构，源端变更可能导致字段无法同步。跳过后该事件会被记入审计。'}
         </Callout>
         <div className="confirm-meta">
@@ -144,7 +144,7 @@ export function DDLPage() {
         {pendingDecision.record.note && <div className="modal-footnote">{pendingDecision.record.note}</div>}
       </>}
     </Modal>
-    <div className="help-strip"><b>审批语义提示</b><span>白名单 DDL 可自动执行；DROP、RENAME、缩容或类型变更等操作不会由 approve 自动执行。请先在目标库完成相同变更，再审批以触发复验。</span></div>
+    <div className="help-strip"><b>审批语义提示</b><span>批准 = 系统自动在目标库执行全部对账变更（含删列/改名/类型变更）并复验恢复；auto 策略下仅白名单内操作（加列/扩容/注释/建表）免审批自动执行。多条 DDL 的累计差异会在首个挂起事件中一次性对账。</span></div>
   </>
 }
 

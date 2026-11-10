@@ -310,14 +310,15 @@ etcd 生产用 3 节点集群（quorum 丢失=全停安全态，恢复自动重�
 
 | 场景 | 行为 | 人工动作 |
 |------|------|---------|
-| auto + 加列/varchar 扩容/注释/白名单表缺表补建 | 目标自动同步 | **零** |
+| auto + 加列/varchar 扩容/注释/列属性/白名单表缺表补建 | 目标自动同步 | **零** |
 | pause（默认）+ 任何 DDL | 挂起等审批（位点冻结，防止带缺口运行） | Web 一次点击 |
-| DROP/RENAME/缩容/改类型（任何策略） | 挂起等审批；**approve 不自动执行**——人工先在目标端执行同样 DDL，approve 只做复验+resume；或 skip（目标保旧结构继续） | 改目标 + 一次点击 |
+| DROP/RENAME/缩容/改类型/改主键（任何策略） | 挂起等审批；**approve = 系统自动在目标库执行全部对账变更**（含危险操作——人工已批准）并复验 resume；或 skip（目标保旧结构继续） | Web 一次点击 |
+| 同表连续多条 DDL | 累计差异合并进**首个挂起事件**一次对账；后续 DDL 到达时已对齐，各自复验自动通过（auto 不再挂起） | 最多一次点击 |
 
 ```bash
-# 看挂起
+# 看挂起（note 含逐条待执行语句与分类明细）
 curl -u admin:xxx http://127.0.0.1:8060/api/v1/ddl-events
-# 批准（目标自动执行，resume）
+# 批准（系统自动执行全部对账，resume）
 curl -u admin:xxx -X POST 'http://127.0.0.1:8060/api/v1/ddl/{event_id}/approve?confirm=true'
 # 跳过（审计留痕）
 curl -u admin:xxx -X POST 'http://127.0.0.1:8060/api/v1/ddl/{event_id}/skip?confirm=true'
