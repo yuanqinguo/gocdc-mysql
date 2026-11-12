@@ -203,3 +203,73 @@ compose 纯 flag 因默认文件名非空直接 loadBootstrap 报错、ETCD_HOST
 - 验收：L1 18 包 + WSL -race 两包绿；L3 定向 10_boot 13/13（桩形态）+
   40_ha 5/5（flag_start 形态）绿。运维注意：dev61 若拉新镜像须同步本次
   compose 改动（-config-key），或把 104 的正文迁到默认键后去掉该 flag。
+
+
+### 2026-11-11 目标表自动建表 + ddl_sync 同名回退收紧（用户决策）
+
+**动机**：用户指出「加新表」工作流要求目标表预建（Web 预检 422 / 启动核对拒启），
+人工环节多余——白名单 CREATE TABLE 建表能力（ddlgen）早已存在，但触发条件只有
+运行期 DDL 事件，而新表进白名单前其 CREATE 事件已被过滤，运行期永远等不到。
+**决策（用户三选）**：现在实施；库预建、表全自动；配套收紧同名回退（要求显式
+target_database——自动建表拆掉「缺表报错」护栏后，schema 手滑+同名回退会静默
+在错误目标库建出整套表）。
+
+**实现**：
+- 启动对账建表：verifyTargetTables 对规则覆盖但目标缺表的表（ddl_sync=true、
+  策略非 ignore、无挂起审批）先 TableExists 前置判定 → ensureTargetTable
+  （DiffTargetTable 的 CREATE 白名单语句 + ApplyTargetDDL）→ 照常全量核对作
+  二次防线；建表日志带 auto_created 计数。ignore=目标结构另有管理人维持
+  fail-fast；库级不自动建（缺库=Error 1049 拒启，库须预建）。
+- 预检放宽：preflightRules 抽出可测核心 preflightRulesCore；缺表（ddl_sync=true
+  非 ignore）→ warning 放行（do_stock=false 声明「历史数据不回填」），缺库 →
+  报错，表存在但结构不符仍 422。
+- 校验收紧：validateSourceSpec 对 ddl_sync=true 源的 MySQL sink 表逐表解析
+  target_database（表级>组级>全局），落同名回退的组报错点名（聚合、封顶 5 个表名）。
+- schemacheck：新增 DatabaseExists/TableExists 导出原语；「目标表不存在」文案
+  更新（旧文案「须预先存在」已随语义过期）。
+
+**资产适配**：deploy/config.example.yml + examples/single.yml/cluster.yml 组级
+显式同名 target_database（新校验会拒掉旧样例）；init-dst.sql 头注释改写；
+.verify/v2 body_main/single/hiprio/extra 15 个组补显式同名（保 L3 行为不变；
+中途 tmp 脚本 bytes 写入截断 body_main.yml，git checkout 恢复后重跑——教训：
+批量改资产先备份或先写副本）。
+
+**文档**：GUIDE §2.2/§4 表/FAQ、RUNBOOK §3 重写+§9.1、arch03 样例注释、arch05
+§5.1、arch08 §2 表格+§4、arch13 API 表、config README §6 约束、TESTCASES
+（DDL-13/14、API-14 新行，ADV-01/运行前提 6 改写）、RulesManage.tsx 两处文案。
+
+**验证**：Windows L1 build/vet/全包单测绿；WSL -race 四包绿；cmd 层**首个触库
+集成测试**（TestIntegrationVerifyTargetTablesAutoCreate 五分支 +
+TestIntegrationPreflightCoreAutoCreate 四分支，真 MySQL 容器）全绿——auto 建表
+带唯一键/注释、pending 降级、nosync/ignore/缺库拒启逐条实证；sink/mysql 集成
+回归绿；全配置正文（9 仓库资产+9 v2 body）过真实 Load 链路 OK。web 
+typecheck + vitest 53/53 + vite build 绿（dist 已重建、api 包复验绿）。
+**WSL 真环境端到端（.verify/ddlauto/ 套件，26 断言全绿）**：etcd 形态三容器
+（ddl-src 13506 ROW+FULL+GTID / ddl-dst 13507 / ddl-etcd 13579 同实例双角色，
+纯 flag -config-key /gocdc/ddlauto/config）。七阶段：A 目标零表启动→自动建表
++stock+running；B 增量探针；C **Web 加表全链**（GET raw/seed → check_only 200
+带「自动建表」预告 → PUT 保存 revision=15 → apply-restart 优雅退出 → 重启
+auto-created=1 建 orders → stock 2 行 skipped=1 精准只补新表）；D orders 增量；
+E 同名回退拒载+报错点名（进程退出）；F ghostdb 建表失败 Error 1049+源级
+failed+进程活+目标无副作用；G ddl_sync=false 拒启 → 恢复后 auto_created=2
+双表自愈+增量续流（done 标记保留不重跑全量）。**教训四条**：healthz 挂
+metrics 端口不在 web 端口（start_node 判就绪用 /api/v1/status）；shell 变量
+存 curl 命令时 --noproxy * 无引号在展开期 glob 成文件列表（改函数封装）；
+setsid 后台 $! 不可靠（pgrep+cwd 探活）；套件非幂等（绝对计数断言），
+必须先 00_reset 再场景。
+**全矩阵回归（2026-11-12 收官，用户令「所有用例都跑一次」）**：L1 Windows
+build/vet 双 tags/全包单测绿；WSL -race 全仓 19 包绿；L2 testcontainers
+18 包全绿（l2_nokafka_1111.log + kafka 包补跑）；L3 v2 12 组 111 断言全绿
+（l3_full_1111.log + 70_adv 重跑）；ddltest 20_scenario 27/27 +
+21_scenario2 37/37；ddlauto 26/26。**本轮改动的实际波及面=5 份测试正文资产**
+（ddl_sync=true 下同名回退被拒）：ddltest/app.yml、.verify 根 config-node1/2/
+shared/shared-n2 补显式同名 target_database（旧行为等价）；ADV-01 断言与新
+语义兼容无需改（第一层拦截改为自动建表+寻址键拒启，exit≠0 断言不变）。
+产品代码零缺陷。**环境教训三条**：① 两个 docker pull 赛跑 + L2 并发=MySQL
+容器就绪超时批量假失败（静默重跑全绿）——pull 与触库测试禁止并行；②
+Docker Hub 直拉 confluent-local 45min+ 无产出，DaoCloud
+（docker.m.daocloud.io/confluentinc/...）独占 9min 完成，L2 支持
+KAFKA_IMAGE 覆盖名；③ wsl.exe 内联 for 循环 $var 必被剥皮（本轮违规 5 次），
+带变量的循环一律落 .sh。**套件运行契约**：l3_full_1104.sh 尾部四组会撞
+65_mq rmqcons 退场锁（~1min）瞬间失败——锁释放后 run_group.sh 逐组重跑即可；
+ddltest 两套件各自需要 00_reset+10_start 新环境（共享状态会脏绝对计数断言）。

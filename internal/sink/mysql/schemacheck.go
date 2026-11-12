@@ -20,6 +20,31 @@ type TargetCheckResult struct {
 // OK 是否可启动。
 func (r *TargetCheckResult) OK() bool { return len(r.Errors) == 0 }
 
+// DatabaseExists 目标库是否存在（库预建原则的核对原语；information_schema.SCHEMATA）。
+func DatabaseExists(ctx context.Context, db *sql.DB, schema string) (bool, error) {
+	var one int
+	err := db.QueryRowContext(ctx,
+		`SELECT 1 FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ?`, schema).Scan(&one)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// TableExists 目标表是否存在（information_schema.TABLES）。VerifyTargetTable 的
+// 「表不存在」错误串不做结构化区分——调用方需要「缺表走自动建表 / 缺库报错」
+// 分支语义时，用本函数前置判定。
+func TableExists(ctx context.Context, db *sql.DB, schema, table string) (bool, error) {
+	var one int
+	err := db.QueryRowContext(ctx,
+		`SELECT 1 FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?`,
+		schema, table).Scan(&one)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return err == nil, err
+}
+
 // VerifyTargetTable 目标表结构核对（05 §5.1.4）：
 //  1. 目标表存在且包含全部非 exclude 列（列缺失写入必炸 → fail-fast）；
 //  2. exclude 列仍存在目标表 → 告警（10 §3：目标列取 DEFAULT/NULL）；该列
@@ -47,7 +72,7 @@ func VerifyTargetTable(ctx context.Context, db *sql.DB, targetDB string,
 		return res
 	}
 	if len(cols) == 0 {
-		addErr("目标表 %s.%s 不存在（目标表须预先存在；DDL 建表走 ddl_policy=auto，08 §2）", targetDB, meta.Table)
+		addErr("目标表 %s.%s 不存在（目标库须预建；目标表须预建，或启用 targets.mysql.ddl_sync 由启动对账自动建表，08 §2）", targetDB, meta.Table)
 		return res
 	}
 

@@ -154,7 +154,7 @@ export function RulesManage({ sid, pendingDDL = [], enabledSinks = [], readOnlyV
           <Alert type="info" showIcon message="保存前服务端会执行三道护栏：" description={
             <ol style={{ margin: '4px 0 0', paddingLeft: 20 }}>
               <li>全量配置校验（与启动加载同一管线）</li>
-              <li>变更表活体预检（目标表须预建、列集一致）</li>
+              <li>变更表活体预检（目标库须预建；目标表预建或 ddl_sync 自动建表、列集一致）</li>
               <li>防并发覆盖（版本不一致返回 409）</li>
             </ol>
           } />
@@ -505,7 +505,7 @@ function TableForm({ onReady, initial, schemaHint }: TableFormProps) {
       mask_columns: initial.mask_columns && Object.keys(initial.mask_columns).length ? JSON.stringify(initial.mask_columns) : '',
     }}>
       <Alert type="info" showIcon style={{ marginBottom: 12 }}
-        message={`目标表须已预建且列集一致（保存前服务端自动活体预检，源库 ${schemaHint}）`} />
+        message={`目标库须已预建；目标表可预建或由启动对账自动建表（ddl_sync=true），列集一致（保存前服务端自动活体预检，源库 ${schemaHint}）`} />
       <Form.Item name="table" label="表名（须具体表名：禁空白/点/反引号/*通配）" rules={[{ required: true, message: '表名必填' }]}>
         <Input placeholder="表名" />
       </Form.Item>

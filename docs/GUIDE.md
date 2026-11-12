@@ -45,10 +45,16 @@ GRANT RELOAD, BACKUP_ADMIN ON *.* TO 'repl'@'%';
 
 ### 2.2 目标库（MySQL，必须满足）
 
-- **同名库表必须预先存在**（列集一一对应）。gocdc 不替你建首次表——但增量期的
-  `ADD COLUMN`/扩容/注释，以及白名单表的目标缺表补建（CREATE TABLE），可自动同步
-  或 Web 审批（见 §6 DDL）；白名单外表的建表事件一律过滤。
-- 账号要有目标库表的 INSERT/UPDATE/DELETE（+开 ddl_sync 时的 DDL 权限）。
+- **目标库（DATABASE）必须预先存在**——库级不自动建（字符集/排序规则归运维管）。
+- **目标表**：预建（同名同表、列集一一对应）**或**交给启动对账自动建表——
+  `targets.mysql.ddl_sync: true` 时节点启动对规则覆盖的缺表按源结构自动
+  `CREATE TABLE`（含列序/主键/唯一键/注释，08 §2），随后照常自动全量；
+  `ddl_sync: false` 或组 `ddl_policy: ignore` 时仍须预建（缺表 fail-fast）。
+  白名单外表的建表事件一律过滤（组形态无新表自动接入）。
+  **约束**：ddl_sync=true 时 `target_database` 必须显式配置（表级/组级/全局任一，
+  加载校验拒绝同名回退——防 schema 改动连带在错误的目标库建表）。
+- 账号要有目标库表的 INSERT/UPDATE/DELETE、CREATE（自动建表）及开 ddl_sync 时的
+  其他 DDL 权限。
 
 ### 2.3 协调面
 
@@ -178,11 +184,11 @@ curl -u admin:admin123 -X POST -H 'Content-Type: application/json' \
 
 | 字段 | 说明 |
 |------|------|
-| `addr/user/password/charset` | 目标库连接；目标**同名库表须预建** |
+| `addr/user/password/charset` | 目标库连接；目标**库须预建**，表可预建或由 ddl_sync 自动建表（§2.2） |
 | `target_database` | 空=与源库同名（推荐）；填了则该实例所有规则写这个库。**规则级同名覆盖**：`rules[].target_database`（库级/表级）解析优先于全局 |
 | `max_open_conns` | 必须 ≥1（连接池上限）；`max_idle_conns` 默认 5 |
 | `tx_chunk_rows` | 单事务最大行数（500），大事务切块提交 |
-| `ddl_sync` | true 时允许 auto/审批策略在目标执行白名单 DDL（仅 MySQL 直写下游；mysql 未启用时配置校验拒绝） |
+| `ddl_sync` | true 时允许 auto/审批策略在目标执行白名单 DDL，且启动对账对规则覆盖的缺表自动建表（08 §2；此时 target_database 必须显式——同名回退被加载校验拒绝）。仅 MySQL 直写下游；mysql 未启用时配置校验拒绝 |
 
 ### 4.3 targets.kafka（Kafka 下游）
 
@@ -422,7 +428,7 @@ curl http://127.0.0.1:9595/metrics                            # Prometheus 指�
 | 现象 | 原因与处置 |
 |------|-----------|
 | 启动报「binlog_format 非 ROW」 | 源库参数不满足，改配置并重启会话（检查器 fail-fast） |
-| 启动报「目标表 xxx 不存在」 | 目标同名库表须预建；或列集不一致（缺列/NOT NULL 无默认的 exclude 列） |
+| 启动报「目标表 xxx 不存在」 | ddl_sync=false 或 ddl_policy=ignore 的源目标表须预建（ddl_sync=true 时缺表会自动建，见 §2.2）；或列集不一致（缺列/NOT NULL 无默认的 exclude 列） |
 | 启动报「无快照锁权限」 | 复制账号缺锁权限：FTWRL 由 RELOAD **或 FLUSH_TABLES** 任一放行，backup 锁需 BACKUP_ADMIN（06 §3 降级矩阵）；或显式 `stock.lock_mode:"none"` 接受近似一致 |
 | 启动报「下游目标不可达」 | 目标库连接失败；先 telnet 目标端口 |
 | RMQ 启动报 TOPIC_NOT_FOUND | topic 未预建——mqadmin updateTopic（§7.2） |

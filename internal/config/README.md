@@ -404,6 +404,10 @@ observability:
 - 表级不可写 `sinks`/`ddl_policy`（整组统一）。
 - 解码期严格校验未知字段——`table`/`do_stock` 等表级字段写在组条目上
   会被拒绝并指引到本节。
+- **ddl_sync=true 禁止同名回退**（2026-11-11）：`targets.mysql.ddl_sync: true`
+  时，MySQL sink 表的 `target_database` 必须能显式解析（表级 > 组级 > 全局任一
+  命中，否则加载报错点名回退表）——自动建表模式下「目标缺表报错」护栏不复存在，
+  显式库名防 schema 改动连带在错误的目标库建表。ddl_sync=false 不受影响。
 - **Web 编辑走同一校验器**（2026-11）：规则页「编辑规则」保存 =
   `PUT /api/v1/sources/{sid}/rules`——服务端在原始正文上做 yaml.Node 手术
   （只替换该源 rules 段，`${ENV}` 占位/注释/键序保留），随后走与启动完全

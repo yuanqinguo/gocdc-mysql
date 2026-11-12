@@ -36,6 +36,10 @@ sources:
       - schema: demo
         sinks: {mysql: true}
         ddl_policy: auto
+        # ddl_sync=true 时 target_database 必须显式（表级/组级/全局任一）——
+        # 自动建表模式下禁止同名回退（防 schema 改动连带在错误的目标库建表）。
+        # 此处显式声明与源同名（目标 demo 库由 init-dst.sql 预建）。
+        target_database: demo
         tables:
           - {table: orders, order_by_column: id, do_stock: true}
 node: {id: "", advertise_addr: ""}

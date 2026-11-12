@@ -157,6 +157,73 @@ sources:
 	}
 }
 
+// ddl_sync=true（自动建表模式）收紧同名回退：MySQL sink 表的 target_database
+// 必须能显式解析（表级/组级/全局任一）；ddl_sync=false 维持原语义允许同名回退。
+func TestValidate_DDLSyncRequiresExplicitTargetDatabase(t *testing.T) {
+	base := func(mutate func(g *Rule, m *MySQLOptions)) []error {
+		return runV(t, func(c *Config) {
+			c.Sources[0].Rules = []Rule{{
+				Schema: "db1", DDLPolicy: "auto",
+				Sinks:  &RuleSinks{MySQL: RuleSink{Enabled: true}},
+				Tables: []TableRule{{Table: "t1", OrderByColumn: "id", DoStock: boolPtr(true)}},
+			}}
+			if mutate != nil {
+				mutate(&c.Sources[0].Rules[0], &c.Sources[0].Targets.MySQL)
+			}
+		})
+	}
+	contains := func(errs []error, sub string) bool {
+		for _, e := range errs {
+			if strings.Contains(e.Error(), sub) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// 全未配置 → 报错点名回退表
+	if errs := base(func(g *Rule, m *MySQLOptions) { m.DDLSync = true }); !contains(errs, "同名回退") || !contains(errs, "t1") {
+		t.Fatalf("ddl_sync=true 未配置 target_database 应报错点名 t1: %v", errs)
+	}
+	// 全局默认兜住
+	if errs := base(func(g *Rule, m *MySQLOptions) { m.DDLSync = true; m.TargetDatabase = "merge" }); len(errs) != 0 {
+		t.Fatalf("全局 target_database 应放行: %v", errs)
+	}
+	// 组级兜住
+	if errs := base(func(g *Rule, m *MySQLOptions) { m.DDLSync = true; g.TargetDatabase = "merge" }); len(errs) != 0 {
+		t.Fatalf("组级 target_database 应放行: %v", errs)
+	}
+	// 表级兜住
+	if errs := base(func(g *Rule, m *MySQLOptions) {
+		m.DDLSync = true
+		g.Tables[0].TargetDatabase = "merge"
+	}); len(errs) != 0 {
+		t.Fatalf("表级 target_database 应放行: %v", errs)
+	}
+	// 混合：部分表显式 → 只点名回退表
+	if errs := base(func(g *Rule, m *MySQLOptions) {
+		m.DDLSync = true
+		g.Tables = append(g.Tables, TableRule{Table: "t2", OrderByColumn: "id", DoStock: boolPtr(true), TargetDatabase: "other.merge"})
+	}); !contains(errs, "t1") || contains(errs, "t2、") {
+		t.Fatalf("混合场景应只点名回退表 t1: %v", errs)
+	}
+	// ddl_sync=false → 不收紧
+	if errs := base(nil); len(errs) != 0 {
+		t.Fatalf("ddl_sync=false 应允许同名回退: %v", errs)
+	}
+	// kafka-only 组不受约束（无 MySQL 目标写入）
+	if errs := runV(t, func(c *Config) {
+		c.Sources[0].Targets.MySQL.DDLSync = true
+		c.Sources[0].Rules = []Rule{{
+			Schema: "db1", DDLPolicy: "auto",
+			Sinks:  &RuleSinks{Kafka: RuleSink{Enabled: true}},
+			Tables: []TableRule{{Table: "t1", DoStock: boolPtr(false)}},
+		}}
+	}); len(errs) != 0 {
+		t.Fatalf("kafka-only 组不应受同名回退约束: %v", errs)
+	}
+}
+
 // 组形态 YAML 端到端：块状嵌套表清单经真实 Load 链路解析。
 func TestLoad_GroupRulesYAML(t *testing.T) {
 	yml := `

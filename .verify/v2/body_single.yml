@@ -31,10 +31,12 @@ sources:
         ddl_sync: true
     rules:
       - schema: shop
+        target_database: shop
         sinks: {mysql: true}
         tables:
           - {table: users, do_stock: false}
       - schema: rmqtest
+        target_database: rmqtest
         ddl_policy: auto
         sinks: {mysql: true}
         tables:

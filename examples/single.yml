@@ -39,7 +39,9 @@ sources:
         conn_max_lifetime_min: 30
         tx_chunk_rows: 500 # 单事务最大行数，大事务切块提交
         target_database: "" # 空=与源库同名；填了则该实例所有规则写此库
-        ddl_sync: true # auto/审批策略可在目标执行白名单 DDL
+        ddl_sync: true # auto/审批策略可在目标执行白名单 DDL；true 时启动对账
+        # 还会在目标缺表时按源结构自动建表（08 §2）——此时 target_database
+        # 必须显式（表级/组级/全局任一，下方组级已显式同名）
     rules:
       # 组形态白名单（唯一形态）：组级 sinks/ddl_policy 统一，tables 逐表列出；
 
@@ -47,6 +49,8 @@ sources:
       - schema: shop
         sinks: {mysql: true} # 至少一个下游；声明 mysql 须启用 targets.mysql
         ddl_policy: auto # auto | pause | ignore
+        target_database: shop # ddl_sync=true 必须显式（禁止同名回退：防 schema
+        # 改动连带在错误的目标库建表）；显式同名 = 与历史行为一致
         tables:
           - {table: users, order_by_column: id, do_stock: true,} # do_stock=true 参与首启全量
           # - { table: orders, order_by_column: id, do_stock: true,

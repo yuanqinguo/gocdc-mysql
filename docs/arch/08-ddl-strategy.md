@@ -22,7 +22,7 @@
 |-----|-----------|------|
 | ADD COLUMN | `ALTER TABLE ... ADD COLUMN`（列定义由源 information_schema 生成，含注释） | 追加在末尾；目标列序差异用列名对齐消化（见 §4） |
 | MODIFY COLUMN 仅 varchar 长度放大 / 列安全属性（默认值/可空/注释） | `ALTER TABLE ... MODIFY ...` | 缩小、类型变更不在白名单 |
-| CREATE TABLE（规则白名单表在目标缺失） | 建表（结构含主键/注释/列序，`IF NOT EXISTS` 幂等） | 白名单外表的 CREATE 不产生事件（组形态无新表自动接入） |
+| CREATE TABLE（规则白名单表在目标缺失） | 建表（结构含主键/注释/列序，`IF NOT EXISTS` 幂等）。两条触发路径：① 运行期 DDL 事件 diff；② **启动对账**（2026-11-11）——节点启动时对规则覆盖的缺表直接执行（ddl_sync=true 且策略非 ignore；挂起审批表除外）。必须启动期补建的根因：新表进白名单前其 CREATE 事件已被过滤，运行期永远等不到 | 白名单外表的 CREATE 不产生事件（组形态无新表自动接入）；目标**库**（DATABASE）不自动建，须预建 |
 
 白名单外（DROP COLUMN/RENAME/改主键/类型变更/缩容…）→ `pause`。
 
@@ -112,7 +112,7 @@ sequenceDiagram
 - 每表维护 `TableMeta{version, columns[], pk[], indexes, comments}`，版本号单调递增，写入事件消息 `schema_version`。
 - 结构来源：canal `schema` 包缓存（`go-mysql-org/go-mysql/schema`）+ information_schema（注释、全量索引），带 TTL 的懒刷新 + DDL 主动刷新。
 - 并发安全：TableMeta 不可变对象，切换用 `atomic.Pointer` 替换（快照原子可见，读侧无锁）。
-- 启动时对每条规则做一次源/目标结构核对：目标表不存在（且 mysql sink 启用）→ 报错（不自动建表，除 CREATE TABLE 白名单场景）；列缺失/类型不兼容 → 报错列出差异。
+- 启动时对每条规则做一次源/目标结构核对：目标表不存在（且 mysql sink 启用）→ `targets.mysql.ddl_sync=true` 且策略非 ignore 时**启动对账自动建表**（2026-11-11，见 §2），否则报错 fail-fast；列缺失/类型不兼容 → 报错列出差异（建表后同样全量核对作二次防线）。**配套收紧**：ddl_sync=true 时 `target_database` 必须显式（表级/组级/全局任一，加载校验拒绝同名回退）——自动建表拆掉了「缺表报错」护栏，显式库名防 schema 改动连带在错误的目标库建表。
 
 ## 5. 暂停与人工介入流程
 

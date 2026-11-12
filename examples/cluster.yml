@@ -41,12 +41,14 @@ sources:
         conn_max_lifetime_min: 30
         tx_chunk_rows: 500
         target_database: "" # 空=与源库同名
-        ddl_sync: true
+        ddl_sync: true # true 时启动对账会在目标缺表时自动建表（08 §2），
+        # 此时 target_database 必须显式（组级已显式同名）
     rules:
       - schema: shop
         sinks: {mysql: true}
         ddl_policy: pause # 集群形态推荐 pause：DDL 审批走 Web（follower
         # 也能审批，leader 执行）
+        target_database: shop # ddl_sync=true 必须显式（禁止同名回退）；显式同名 = 与历史行为一致
 
         tables:
           - {table: orders, order_by_column: id, do_stock: true}

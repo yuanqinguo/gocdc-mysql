@@ -42,6 +42,7 @@ sources:
         send_timeout_ms: 5000
     rules:
       - schema: shop
+        target_database: shop
         sinks: {mysql: true}
         tables:
           - {table: orders, do_stock: true, order_by_column: id}
@@ -52,20 +53,24 @@ sources:
           - {table: adv13t, do_stock: true, order_by_column: id}
           - {table: dying_table, do_stock: true, order_by_column: id}
       - schema: types
+        target_database: types
         ddl_policy: auto
         sinks: {mysql: true}
         tables:
           - {table: all_types, do_stock: true, order_by_column: id}
       - schema: biz2
+        target_database: biz2
         sinks: {mysql: true}
         tables:
           - {table: events, do_stock: false}
       - schema: rmqtest
+        target_database: rmqtest
         ddl_policy: auto
         sinks: {mysql: true, rocketmq: true}
         tables:
           - {table: msg, do_stock: true, order_by_column: id}
       - schema: cluster_e2e
+        target_database: cluster_e2e
         sinks: {mysql: true}
         tables:
           - {table: tab, do_stock: true, order_by_column: id}

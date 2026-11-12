@@ -97,6 +97,8 @@
 | DDL-10 | 集群下 DDL 审批（follower API → leader 执行） | gate 走 etcd 任意节点可批 | L3 | 验收 E9 | ✅-L3 |
 | DDL-11 | pause 挂起期间位点冻结（水位不越 DDL 位点） | 挂起期写入审批后补齐 | L2+L3 | TestIntegrationDDLPolicies + 验收 E3 | ✅ |
 | DDL-12（反方） | 注释变更（仅 COMMENT，表+列） | ddlgen 白名单差异（列注释/表注释）→ auto 零干预同步、无挂起、数据续流 | L3 | 验收 95 DDL-12 | ✅-L3 |
+| DDL-13 | **启动对账自动建表**（2026-11-11）：白名单表目标缺失 + ddl_sync=true（auto/pause） | 按源结构建表（列序/主键/唯一键/注释，IF NOT EXISTS 幂等）→ 核对通过、重跑幂等；挂起审批表跳过建表、差异降级告警（重放停回审批）；建表日志 auto_created 计数 | L2 | TestIntegrationVerifyTargetTablesAutoCreate（cmd 首个触库集成） | ✅ |
+| DDL-14（反方） | 缺表 fail-fast 维持面：ddl_sync=false / 组 ddl_policy=ignore / 目标**库**缺失 | 三分支均拒启（ignore=目标结构另有管理人；库级不自动建——Error 1049 可见） | L2 | 同上（t_nosync/t_ignore/ghostdb 分支） | ✅ |
 
 ## 5. 启动/配置（BOOT/CFG）
 
@@ -131,6 +133,7 @@
 | API-11 | **PUT /sources/{sid}/rules 保存全链**（13 §8）：splice→校验→预检→CAS→审计 | 缺 confirm 400 / 缺 base 400 / base 陈旧 409 快速失败且不写不预检（2026-11-04 优化：冲突在 ReadRaw 后即拒）/ 未知字段（平铺写法）400 带指引 / 空规则 400 / 预检错误 422 不写 / check_only 免 confirm 不写不审计 / 成功 200 新 revision；**etcd 正文：新 rules 落盘、`${ENV}` 占位原样、段外注释文本/键序/占位/引号风格保留（缩进折行由重编码按 2 空格归一，非逐字节）**；审计含 diff 摘要（冲突+成功各一条） | L1+L2+L3 | TestRouter_PutRules_Save / Rejections / CheckOnly + config rawedit 单测（注释/占位/引号三铁律）+ TestIntegrationConfigEdit ②③④⑤ | ✅ |
 | API-12 | **POST /config/apply-restart 重载**（13 §8） | 未接入 409；无 confirm 400；confirm 受理 200 且 Shutdown 恰触发一次（响应先行）；审计 `config.apply_restart` | L1 | TestRouter_ApplyRestart（applyRestartDelay 调短） | ✅ |
 | API-13 | **规则编辑前端纯逻辑**（ruleDraft） | 服务端组形态 JSON ⇄ 草稿往返无损（sinks 对象/bool 双形态、mask 对象/字符串双形态归一）；客户端必填校验（缺 order_by/重复库表/空 sink/空 tables）；exclude/mask 文本编解码；diff 摘要文案 | L1(web) | web/src/features/rules/ruleDraft.test.ts（9 用例，vitest） | ✅ |
+| API-14 | **加载校验+活体预检的缺表语义**（2026-11-11）：ddl_sync=true 收紧同名回退 + 缺表自动建表预告 | 校验：ddl_sync=true 且 MySQL sink 表 target_database 表级/组级/全局均未配置 → 报错点名回退表（ddl_sync=false/kafka-only 豁免）；预检：缺表→warning 放行（do_stock=false 声明「历史数据不回填」）、缺库→报错（库须预建）、表存在但结构不符→422 维持 | L1+L2 | TestValidate_DDLSyncRequiresExplicitTargetDatabase + TestIntegrationPreflightCoreAutoCreate | ✅ |
 
 ## 7. 反方对抗验证记录（ADV，2026-10-29/30 真实环境执行）
 
@@ -139,7 +142,7 @@
 
 | ADV | 对抗输入 | 预期 | 实际结果 |
 |-----|---------|------|---------|
-| ADV-01 | 无主键表建表+插数+接入同步 | fail-fast 指明无主键 | ✅ 双层拦截：目标未预建→「不存在」拒启；补建后→「无主键且未配 order_by_column 无法寻址」拒启（05 §5.1.3） |
+| ADV-01 | 无主键表建表+插数+接入同步 | fail-fast 指明无主键 | ✅ 拦截语义随 ddl_sync 分叉（2026-11-11）：ddl_sync=true 时缺表先被启动对账自动建表（无主键表源结构无 PK 照建），随后核对层「无主键且未配 order_by_column 无法寻址」仍拒启；ddl_sync=false 维持「目标未预建→不存在拒启」双层（05 §5.1.3） |
 | ADV-02 | 目标表加额外 UNIQUE KEY 后 UPDATE 同键 | upsert 走 UK 更新不炸 | ✅ UPDATE 正常收敛（ON DUPLICATE KEY 撞 UK 路径无异常） |
 | ADV-03 | 表名/列名用保留字 `order`/`key`/`select`（反引号） | 全链可用 | ✅ 建表+INSERT/UPDATE 全链收敛（2 行、max(select)=99） |
 | ADV-04 | 零日期 0000-00-00 00:00:00（sql_mode 放开） | on_convert_error=null 不炸、目标 NULL | ✅ 目标 `<NULL>`，管线不受影响 |
@@ -221,7 +224,7 @@ L3 脚本 `.verify/v2/35_ms_core.sh`（数据面）+ `46_ms_ha.sh`（故障面�
 3. 优雅停机用水位终值覆盖手工位点——回拨必须停机后做。
 4. 白名单外 DDL approve 不自动执行（无安全生成器）——人工先改目标，approve=复验+resume。
 5. RENAME 白名单外表 → 新旧表名均不在白名单（不同步）。
-6. 启动核对要求规则覆盖表在目标预建（含 pause 策略下 CREATE 可审批自动建的新表）——运维预建库即可。
+6. 目标**库**（DATABASE）恒须预建（库级不自动建）；目标表：ddl_sync=true（非 ignore）时缺表由启动对账自动建表（2026-11-11，DDL-13），否则须预建。ddl_sync=true 时 target_database 必须显式（同名回退被加载校验拒绝）。
 7. RMQ topic 须预建且 FIFO 属性（`mqadmin updateTopic ... -a +message.type=FIFO`）；v5 客户端只拉路由不建 topic。
 8. event_lag_seconds 是活动口径（无新事件时增长=正常）；追平判定看 master_position_lag_bytes=0。
 9. restock 清标记并**自动触发该源重走**（排空→重扫无 done 标记表→续增量，RUNBOOK §2，2026-11-04 语义升级）；

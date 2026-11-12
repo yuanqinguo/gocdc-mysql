@@ -58,6 +58,7 @@ targets:
 
 rules:
   - schema: shop
+    target_database: shop
     order_by_column: id
     do_stock: true
     exclude_tables: [tmp_log]
@@ -65,20 +66,24 @@ rules:
       phone: phone
     sinks: {mysql: true}
   - schema: types
+    target_database: types
     table: all_types
     do_stock: true
     ddl_policy: auto
     order_by_column: id
     sinks: {mysql: true}
   - schema: biz2
+    target_database: biz2
     do_stock: false
     sinks: {mysql: true}
   - schema: rmqtest
+    target_database: rmqtest
     do_stock: true
     ddl_policy: auto
     order_by_column: id
     sinks: {mysql: true, rocketmq: true}
   - schema: cluster_e2e
+    target_database: cluster_e2e
     do_stock: true
     order_by_column: id
     sinks: {mysql: true}

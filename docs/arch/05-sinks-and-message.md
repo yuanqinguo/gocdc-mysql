@@ -104,7 +104,7 @@ type SinkGroup struct{ sinks []Sink }
 
 ### 5.1 硬约束（配置校验层强制）
 
-1. **目标表 = 源表同名**；目标库 = `targets.mysql` 可配默认库 + 规则可覆盖 `target_database`（支持多源库聚合进一个目标库，表名不可改）。
+1. **目标表 = 源表同名**；目标库 = `targets.mysql` 可配默认库 + 规则可覆盖 `target_database`（支持多源库聚合进一个目标库，表名不可改）。ddl_sync=true 时 target_database 必须显式可解析（同名回退被加载校验拒绝，2026-11-11——启动对账会按显式库名在目标缺表时自动建表，08 §2；库级不自动建）。
 2. **列一一对应、无映射**：默认全列复制；`exclude_columns` 生效时目标表不得包含被排除列（启动时对比目标表结构校验，违规则 fail-fast）；`mask_columns` 生效时写入脱敏值。
 3. 主键必须存在且明确：优先表真实主键；无主键表必须配置 `order_by_column` 且该列有唯一索引（启动校验 information_schema），否则拒绝该规则（放行无主键表会让 DELETE 无法寻址）。
 4. **唯一键治理**：

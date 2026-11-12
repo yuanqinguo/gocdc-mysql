@@ -43,15 +43,18 @@ sources:
         tables:
           - {table: users, do_stock: true, order_by_column: id, target_database: edu.mall.merge}
       - schema: shop
+        target_database: shop
         sinks: {mysql: true}
         tables:
           - {table: users, do_stock: false}
       - schema: rmqtest
+        target_database: rmqtest
         ddl_policy: auto
         sinks: {mysql: true, rocketmq: true}
         tables:
           - {table: msg, do_stock: false}
       - schema: cluster_e2e
+        target_database: cluster_e2e
         sinks: {mysql: true}
         tables:
           - {table: tab, do_stock: false}

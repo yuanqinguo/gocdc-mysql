@@ -105,8 +105,9 @@ sources:                           # 统一 sources[]：单源=数组一条；�
         max_idle_conns: 5
         conn_max_lifetime_min: 30
         tx_chunk_rows: 500         # 单事务最大行数
-        target_database: edu_merge # 默认目标库（05 §5.1.1）；空 = 与源库同名
-        ddl_sync: true             # 允许 auto 策略同步白名单 DDL 到目标
+        target_database: edu_merge # 默认目标库（05 §5.1.1）；ddl_sync=true 时必须显式
+        ddl_sync: true             # auto 策略同步白名单 DDL + 启动对账自动建缺表；
+                                   # true 时 target_database 必须显式（禁止同名回退）
       kafka:
         enabled: true
         brokers: ["10.0.2.1:9092"]

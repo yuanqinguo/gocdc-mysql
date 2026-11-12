@@ -29,7 +29,11 @@ func (a *app) preflightRules(ctx context.Context, sid string, oldRules, newRules
 	if src == nil {
 		return api.PreflightReport{Errors: []string{"源 " + sid + " 不在运行配置中（重启后重试）"}}
 	}
-	spec := src.spec
+	return preflightRulesCore(ctx, src.spec, oldRules, newRules)
+}
+
+// preflightRulesCore 预检主体（独立于装配态，触库路径可集成测试）。
+func preflightRulesCore(ctx context.Context, spec *config.SourceSpec, oldRules, newRules []config.Rule) api.PreflightReport {
 
 	added, removed, modified := config.DiffRules(oldRules, newRules)
 	report := api.PreflightReport{}
@@ -111,6 +115,45 @@ func (a *app) preflightRules(ctx context.Context, sid string, oldRules, newRules
 			maskCols[c] = true
 		}
 		targetDatabase := targetDBOf(spec, group, &tb, ref.Schema)
+
+		// ── 目标缺表分支（2026-11-11）：ddl_sync=true 且策略非 ignore 时缺表
+		// 不再阻断保存——重启后启动对账自动建表（08 §2 CREATE 白名单的启动期
+		// 形态）。库级不自动建（库须预建，缺库仍报错）；表存在但结构不符照旧
+		// 全量核对（误配防护保留）；ddl_sync=false/ignore 维持 fail-fast。
+		policy := group.DDLPolicy
+		if policy == "" {
+			policy = "pause" // 与 validate.go 安全默认一致（提交体未经校验填充）
+		}
+		if spec.Targets.MySQL.DDLSync && policy != "ignore" {
+			exists, terr := mysqlsink.TableExists(tctx, tgtDB, targetDatabase, ref.Table)
+			if terr != nil {
+				report.Errors = append(report.Errors, fmt.Sprintf("%s.%s 目标存在性核对失败: %v", targetDatabase, ref.Table, terr))
+				continue
+			}
+			if !exists {
+				dbOK, derr := mysqlsink.DatabaseExists(tctx, tgtDB, targetDatabase)
+				if derr != nil {
+					report.Errors = append(report.Errors, fmt.Sprintf("目标库 %s 存在性核对失败: %v", targetDatabase, derr))
+					continue
+				}
+				if !dbOK {
+					report.Errors = append(report.Errors, fmt.Sprintf(
+						"目标库 %s 不存在（自动建表只覆盖表级，库须预建；ddl_sync=true 已禁止同名回退，请确认 target_database 配置）", targetDatabase))
+					continue
+				}
+				if tb.DoStock != nil && !*tb.DoStock {
+					report.Warnings = append(report.Warnings, fmt.Sprintf(
+						"%s.%s 目标表不存在——重启后自动建表，仅增量（do_stock=false，历史数据不回填）",
+						targetDatabase, ref.Table))
+				} else {
+					report.Warnings = append(report.Warnings, fmt.Sprintf(
+						"%s.%s 目标表不存在——重启后启动对账将按源结构自动建表，随后自动全量",
+						targetDatabase, ref.Table))
+				}
+				continue
+			}
+		}
+
 		res := mysqlsink.VerifyTargetTable(tctx, tgtDB, targetDatabase, meta,
 			tb.ExcludeColumns, maskCols, tb.OrderByColumn)
 		report.Checked++

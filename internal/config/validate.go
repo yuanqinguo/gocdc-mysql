@@ -259,6 +259,12 @@ func validateSourceSpec(spec *SourceSpec, prefix string, errf func(string, ...an
 	if len(spec.Rules) == 0 {
 		errf("%srules 不能为空", prefix)
 	}
+	// 自动建表模式（ddl_sync=true 时启动对账会在目标端自动建缺失表）：
+	// 「目标缺表报错」这道防误配护栏随之消失——同名回退（表级/组级/全局均未
+	// 配置时回退源库名）会把 schema 改动连带成「换源库+换目标库」的静默映射，
+	// 且目标端会照着建出整套表。故该模式下 MySQL sink 表的目标库名必须显式
+	// 可解析（同名回退收紧，2026-11-11）。
+	ddlAutoCreate := t.MySQL.Enabled && t.MySQL.DDLSync
 	schemaSeen := map[string]int{} // 小写 schema → 组下标（一组一库，源内）
 	for i := range spec.Rules {
 		r := &spec.Rules[i]
@@ -299,6 +305,7 @@ func validateSourceSpec(spec *SourceSpec, prefix string, errf func(string, ...an
 			continue
 		}
 		seenT := map[string]bool{}
+		var fallbackTables []string // ddlAutoCreate 下落同名回退的表（组级聚合报错）
 		for j := range r.Tables {
 			tb := &r.Tables[j]
 			tpath := fmt.Sprintf("%s.tables[%d]", path, j)
@@ -317,6 +324,10 @@ func validateSourceSpec(spec *SourceSpec, prefix string, errf func(string, ...an
 			if tb.TargetDatabase != "" && !schemaRe.MatchString(tb.TargetDatabase) {
 				errf("%s.target_database=%q 含非法字符（库名允许点；禁止空白/反引号/路径符）", tpath, tb.TargetDatabase)
 			}
+			if ddlAutoCreate && r.Sinks != nil && r.Sinks.MySQL.Enabled &&
+				firstNonEmpty(tb.TargetDatabase, r.TargetDatabase, t.MySQL.TargetDatabase) == "" {
+				fallbackTables = append(fallbackTables, tb.Table)
+			}
 			if *tb.DoStock {
 				if tb.OrderByColumn == "" {
 					errf("%s.do_stock=true 但 order_by_column 为空（快照分块排序必需）", tpath)
@@ -332,6 +343,14 @@ func validateSourceSpec(spec *SourceSpec, prefix string, errf func(string, ...an
 				}
 			}
 			checkColumns(tpath, tb.ExcludeColumns, tb.MaskColumns, errf)
+		}
+		if n := len(fallbackTables); n > 0 {
+			shown := fallbackTables
+			if len(shown) > 5 {
+				shown = shown[:5]
+			}
+			errf("%s: targets.mysql.ddl_sync=true 时以下 %d 张表将同名回退到源库 %s（表级/组级/全局 target_database 均未配置）——自动建表模式禁止同名回退（防库名改动连带在错误的目标库建表），请显式配置 target_database: %s",
+				path, n, r.Schema, strings.Join(shown, "、"))
 		}
 	}
 
