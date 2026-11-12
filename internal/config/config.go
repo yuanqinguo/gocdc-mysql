@@ -346,7 +346,8 @@ type Rule struct {
 	// TargetDatabase 组级默认目标库（05 §5.1.1）：空 = targets.mysql.target_database
 	// （再空 = 与源库同名）；表级可按表覆盖；表名不可改。
 	TargetDatabase string `json:"target_database,omitempty"`
-	// Tables 表白名单（必填非空）。
+	// Tables 表白名单（可空=预留组：先建组预留源库/目标库映射后补表；空组显式
+	// 不同步，该库 DDL 维持白名单外过滤）。
 	Tables []TableRule `json:"tables"`
 }
 

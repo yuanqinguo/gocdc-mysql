@@ -294,7 +294,6 @@ func TestValidate_TableDriven(t *testing.T) {
 		{"组内表重复", func(c *Config) {
 			c.Sources[0].Rules[0].Tables = append(c.Sources[0].Rules[0].Tables, TableRule{Table: "T1", DoStock: boolPtr(false)})
 		}, []string{"重复"}},
-		{"tables为空", func(c *Config) { c.Sources[0].Rules[0].Tables = nil }, []string{"tables 不能为空"}},
 		{"do_stock缺失", func(c *Config) { c.Sources[0].Rules[0].Tables[0].DoStock = nil }, []string{"do_stock 必填"}},
 		{"表通配符", func(c *Config) { c.Sources[0].Rules[0].Tables[0].Table = "*" }, []string{"具体表名"}},
 		// ── observability ──

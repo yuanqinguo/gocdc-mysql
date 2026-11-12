@@ -136,9 +136,10 @@ type coordination struct {
 	nodeID string
 }
 
-// setupCoordination etcd 协调面（03 §5）：lease session + 节点注册（role 初始
-// leader，选举/失位回调改写）。源级 store 初始无门槛（leaseID=0 写全拒，
-// 写门槛全覆盖：follower/无主绝不写位点；SetGate 在源流程启动时注入）。
+// setupCoordination etcd 协调面（03 §5）：lease session + 节点注册（集群模式
+// 初始 follower 如实标注，选举/失位回调改写；单节点恒 leader）。源级 store
+// 初始无门槛（leaseID=0 写全拒，写门槛全覆盖：follower/无主绝不写位点；
+// SetGate 在源流程启动时注入）。
 // 协调面 etcd 地址来自启动裁决（bootstrap.etcd_addrs，可与配置中心不同实例）。
 func setupCoordination(ctx context.Context, cluster string, cfg *config.Config,
 	kv *etcdx.KV, cli *clientv3.Client) (*coordination, func(), error) {
@@ -151,6 +152,15 @@ func setupCoordination(ctx context.Context, cluster string, cfg *config.Config,
 	nodeID := cfg.Node.ID
 	if nodeID == "" {
 		nodeID = deriveNodeID()
+	}
+	// advertise_addr 缺省解析（03 §2 注释承诺的本机IP:web端口——2026-11-12 随
+	// 服务级重启落地）：空 = 出口 IP + web 端口，供集群 peer 定位本节点 Web API
+	//（服务级重启逐节点触发用）。web 未启用或解析失败 → 留空（peer 编排跳过）。
+	advertise := cfg.Node.AdvertiseAddr
+	if advertise == "" && cfg.Observability.Web.Enabled {
+		advertise = resolveAdvertiseAddr(cfg.Observability.Web.Addr)
+		logging.L().Info("advertise_addr 缺省，已按出口 IP + web 端口解析",
+			zap.String("advertise_addr", advertise))
 	}
 	// server_id 缺省派生（多源 PRD 05 §6）：按 node.id:sid 逐源派生——
 	// 同进程各源互异（sid 不同）、同源多副本互异（node.id 不同）；显式配置
@@ -165,8 +175,8 @@ func setupCoordination(ctx context.Context, cluster string, cfg *config.Config,
 		}
 	}
 	reg := etcdx.NewRegistrar(kv, prefix, etcdx.NodeInfo{
-		NodeID: nodeID, AdvertiseAddr: cfg.Node.AdvertiseAddr,
-		Version: buildVersion, Role: "leader", // 初始 leader：单节点恒为该值；集群模式由 elector 改写
+		NodeID: nodeID, AdvertiseAddr: advertise,
+		Version: buildVersion, Role: initialRegistryRole(cfg), // 集群模式初始 follower（未当选不自称 leader，编排排序依赖真实角色）；单节点恒 leader
 	})
 	if err := reg.Register(ctx, sess); err != nil {
 		_ = sess.Close()
@@ -219,4 +229,14 @@ func checkSource(ctx context.Context, spec *config.SourceSpec, srcDB *sql.DB) er
 		return fmt.Errorf("启动检查未通过（%d 项必须项失败），拒绝启动（fail-fast）", len(res.Errors))
 	}
 	return nil
+}
+
+// initialRegistryRole 注册表初始角色：集群模式未当选前如实标 follower（elector
+// 当选后改写 leader）——初始恒 leader 会让编排排序把从未当选的节点排最后；
+// 单节点模式无选举，恒 leader。
+func initialRegistryRole(cfg *config.Config) string {
+	if cfg.HA.ClusterEnabled() {
+		return "follower"
+	}
+	return "leader"
 }

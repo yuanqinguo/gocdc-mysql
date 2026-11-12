@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useApi } from '@/app/api'
 import { ApiError } from '@/shared/api/client'
 import { queryKeys } from '@/shared/api/queries'
-import type { PutRulesResult } from '@/shared/api/types'
+import type { ClusterRestartResult, PutRulesResult } from '@/shared/api/types'
 import { Callout } from '@/shared/components/Callout'
 import { diffSummaryText, draftFromRules, payloadFromDraft, validateDraft } from './ruleDraft'
 import type { GroupDraft } from './ruleDraft'
@@ -31,6 +31,7 @@ export function RuleEditor({ sid, open, onClose }: { sid: string; open: boolean;
   const [base, setBase] = useState(0)
   const [result, setResult] = useState<PutRulesResult | null>(null)
   const [savedRevision, setSavedRevision] = useState<number | null>(null)
+  const [restartResult, setRestartResult] = useState<ClusterRestartResult | null>(null)
 
   const load = useQuery({
     queryKey: ['source-rules', sid],
@@ -50,6 +51,7 @@ export function RuleEditor({ sid, open, onClose }: { sid: string; open: boolean;
       setSeeded(false)
       setResult(null)
       setSavedRevision(null)
+      setRestartResult(null)
       return
     }
     if (load.data && !seeded) {
@@ -58,6 +60,7 @@ export function RuleEditor({ sid, open, onClose }: { sid: string; open: boolean;
       setBase(load.data.revision)
       setResult(null)
       setSavedRevision(null)
+      setRestartResult(null)
     }
   }, [open, load.data, seeded])
 
@@ -77,7 +80,10 @@ export function RuleEditor({ sid, open, onClose }: { sid: string; open: boolean;
     onError: (e) => void message.error(e.message),
   })
   const restart = useMutation({
-    mutationFn: () => api.applyRestart(),
+    mutationFn: () => api.applyRestart('cluster'),
+    onSuccess: (res) => {
+      if (res && typeof res === 'object' && 'peers' in res) setRestartResult(res)
+    },
     onError: (e) => void message.error(e.message),
   })
 
@@ -113,9 +119,20 @@ export function RuleEditor({ sid, open, onClose }: { sid: string; open: boolean;
   }
   const confirmRestart = () => {
     modal.confirm({
-      title: '应用并重启本节点？',
-      content: '本进程将优雅停止（排空队列、位点终值落盘、resign），由编排层拉起以应用新配置。若进程无自动拉起机制（compose restart 策略 / k8s），同步将保持停止。',
-      okText: '优雅重启', okButtonProps: { danger: true }, cancelText: '取消',
+      title: '应用并重启服务？',
+      content: (
+        <div>
+          <p>
+            服务级重启：集群部署时<strong>全部节点逐个排空重启</strong>（follower 先、
+            leader 最后，本节点作为编排者收尾），每个节点退出后由编排层拉起并携带新配置；
+            单节点部署即重启本节点。全程约 1-2 分钟，逐节点结果将在完成后展示。
+          </p>
+          <p style={{ margin: '4px 0 0' }}>
+            若节点无自动拉起机制（compose restart 策略 / k8s rollout），该节点需人工启动。
+          </p>
+        </div>
+      ),
+      okText: '优雅重启服务', okButtonProps: { danger: true }, cancelText: '取消',
       onOk: () => restart.mutateAsync().then(() => undefined),
     })
   }
@@ -140,7 +157,7 @@ export function RuleEditor({ sid, open, onClose }: { sid: string; open: boolean;
           </Button>
           <Button danger icon={<ExclamationCircleOutlined />} disabled={savedRevision === null}
             loading={restart.isPending} onClick={confirmRestart}>
-            应用并重启本节点
+            应用并重启服务
           </Button>
           <span style={{ marginLeft: 'auto', color: 'var(--text-tertiary, #999)' }}>CAS base: {base}</span>
         </Space>
@@ -167,6 +184,22 @@ export function RuleEditor({ sid, open, onClose }: { sid: string; open: boolean;
         } style={{ marginBottom: 12 }} />
       )}
       {result && <PreflightResult result={result} />}
+      {restartResult && (
+        <Alert type={restartResult.peers.every((p) => p.ok) ? 'success' : 'warning'} showIcon
+          message={`服务级重启已执行 · peer ${restartResult.peers.filter((p) => p.ok).length}/${restartResult.peers.length} 成功 · ${restartResult.self}`}
+          description={
+            restartResult.peers.length === 0 ? undefined : (
+              <ul style={{ paddingLeft: 18, margin: 0 }}>
+                {restartResult.peers.map((p, i) => (
+                  <li key={i}>
+                    <code>{p.node_id}</code>（{p.addr}，{p.role}）：
+                    {p.ok ? '✓ 已恢复' : <span style={{ color: 'var(--ant-color-warning, #f2c14e)' }}>✗ {p.detail}</span>}
+                  </li>
+                ))}
+              </ul>
+            )
+          } style={{ marginBottom: 12 }} />
+      )}
 
       <Table<GroupDraft>
         rowKey={(g) => g.schema || `__g${drafts.indexOf(g)}`}
@@ -254,8 +287,11 @@ export function RuleEditor({ sid, open, onClose }: { sid: string; open: boolean;
 
 /** 预检/保存结果面板：errors 红（阻断）、warnings 黄（放行）、diff 摘要。 */
 function PreflightResult({ result }: { result: PutRulesResult }) {
-  const hasErrors = result.report.errors.length > 0
-  const hasWarnings = result.report.warnings.length > 0
+  // 服务端 Go nil 切片序列化为 null（api 层已归一化，此处再兜底）
+  const errors = result.report.errors ?? []
+  const warnings = result.report.warnings ?? []
+  const hasErrors = errors.length > 0
+  const hasWarnings = warnings.length > 0
   if (!hasErrors && !hasWarnings) {
     return (
       <Alert type="success" showIcon icon={<CheckCircleOutlined />}
@@ -267,12 +303,12 @@ function PreflightResult({ result }: { result: PutRulesResult }) {
     <div style={{ marginBottom: 12 }}>
       {hasErrors && (
         <Alert type="error" showIcon message={`活体预检未通过（保存被阻断）· ${diffSummaryText(result)}`} description={
-          <ul style={{ paddingLeft: 18, margin: 0 }}>{result.report.errors.map((e, i) => <li key={i}>{e}</li>)}</ul>
+          <ul style={{ paddingLeft: 18, margin: 0 }}>{errors.map((e, i) => <li key={i}>{e}</li>)}</ul>
         } style={{ marginBottom: hasWarnings ? 8 : 0 }} />
       )}
       {hasWarnings && (
         <Alert type="warning" showIcon message="预检警告（不阻断保存）" description={
-          <ul style={{ paddingLeft: 18, margin: 0 }}>{result.report.warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>
+          <ul style={{ paddingLeft: 18, margin: 0 }}>{warnings.map((w, i) => <li key={i}>{w}</li>)}</ul>
         } />
       )}
     </div>

@@ -82,7 +82,6 @@ describe('validateDraft', () => {
     expect(errors.some((e) => e.includes('order_by_column'))).toBe(true)
     expect(errors.some((e) => e.includes('重复'))).toBe(true)
     expect(errors.some((e) => e.includes('sink'))).toBe(true)
-    expect(errors.some((e) => e.includes('tables 不能为空'))).toBe(true)
     expect(errors.some((e) => e.includes('schema）必填'))).toBe(true)
   })
 })
@@ -115,5 +114,13 @@ describe('diffSummaryText', () => {
       .toBe('新增 1 表，修改 1 表')
     expect(diffSummaryText(mk({ removed: [{ schema: 'a', table: 'b' }, { schema: 'a', table: 'c' }] })))
       .toBe('移除 2 表')
+  })
+})
+
+describe('null 归一化（Go nil 切片 → null，api 层兜底 + 纯函数防御）', () => {
+  it('diffSummaryText 对 null 数组不炸', () => {
+    const res = { revision: 1, added: null, removed: null, modified: null,
+      report: { checked: 0, errors: null, warnings: null } } as never
+    expect(diffSummaryText(res)).toBe('无表级变化')
   })
 })

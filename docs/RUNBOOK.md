@@ -109,9 +109,16 @@ sink 配置变更 + 暂停 → 切换 → 恢复。位点不受影响。
    全量校验 + 活体预检 + ModRevision CAS 防并发覆盖）或 etcdctl 直改配置中心键
    （默认 `/config/edu.mall.gocdc/system`；多集群共享 etcd 时为显式区分键）
    （v2 YAML：`sources[]` 数组）→ 滚动重启生效（不热更，现行口径）。
-2. **集群滚动重启顺序**：先逐个重启 follower（带新配置回来当热备），最后重启
-   leader（`POST /api/v1/config/apply-restart?confirm=true` 或编排层重启）。
-   顺序颠倒不产生数据风险（旧配置=少同步，安全方向），只浪费一轮重启。
+2. **集群重启（2026-11-12 服务级重启落地）**：Web「应用并重启服务」=
+   `POST /api/v1/config/apply-restart?confirm=true&scope=cluster`——接住请求的
+   节点作为编排者：从节点注册表取 peers（follower 先 leader 后逐个触发标准
+   apply-restart，等每个 peer 健康恢复），自己最后重启。响应带逐节点结果，
+   失败/超时节点（无编排拉起、凭据不同步、网络不可达）需人工处置——失败的
+   节点保持旧配置运行（数据流不断，混跑窗口靠重启其余节点收敛）。
+   前提：`node.advertise_addr` 留空时自动按「出口 IP + web 端口」解析注册；
+   集群共享同一份配置正文（同一组 Web 凭据）。单节点部署 = 仅重启本节点。
+   手工等价操作仍是逐节点 `POST /api/v1/config/apply-restart`（顺序错无数据
+   风险，只浪费一轮）。
 3. 新增源 = 配置加一项 + 重启：新源首启自动全量，其余源照常（各源独立全量，
    不存在「等最慢源」屏障）。**Web 编辑只覆盖既有源的 rules 段**；加源/改
    source/target 连接仍走 etcdctl/配置文件（编辑端点对 file 形态显式 409）。

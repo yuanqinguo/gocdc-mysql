@@ -387,7 +387,7 @@ observability:
   sinks: { mysql: true }        # 组级必填，至少启用一个
   ddl_policy: auto              # 组级；省略 = pause（安全默认）
   target_database: edu.mall.merge  # 组级可选；省略 = targets.mysql.target_database
-  tables:                       # 必填非空（白名单）
+  tables:                       # 白名单（可空=预留组：先建组预留目标库映射后补表）
     - { table: admin_user, order_by_column: id, do_stock: true }
     - { table: users,      order_by_column: id, do_stock: false,
         mask_columns: { phone: phone } }
@@ -544,7 +544,6 @@ mask_columns:
 | `列 … 同时出现在 exclude_columns 与 mask_columns` | 语义互斥 | 二选一 |
 | `sinks.mysql 不接受 topic/tag` | MySQL 同名同表无映射 | 删掉，改用 kafka/rocketmq 的 topic 覆盖 |
 | `不支持的规则组形态（…）` | table/do_stock 等写在了组条目上 | 按组形态重写：表级字段移入 `tables`（§6.1） |
-| `… tables 不能为空` | 组缺表白名单 | 逐表列出要同步的表 |
 | `… do_stock 必填` | 表条目缺全量声明 | 显式写 `do_stock: true/false` |
 | `… schema 重复（一组一库）` | 同库写了两组 | 合并为一组 |
 | `… 表级规则重复` | 组内表名重复 | 去重 |

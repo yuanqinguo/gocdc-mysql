@@ -59,7 +59,7 @@ internal/api/   # API 实现（web/ = 前端源码，internal/api = 后端）
 | `POST /verify` | 抽样对账：body `{database, table, pk?, sample?}`，返回 `{src_count, tgt_count, checked, mismatch, diffs[]}`；数据差异是正常结果（code=0 看 mismatch），500 仅基础设施故障。对账唯一入口（无 CLI 子命令——Docker 部署下运维操作一律走 Web，无需进节点） |
 | `PUT /config` | 写回 etcd 配置（提示需重启生效；不做热更） |
 | `PUT /sources/{sid}/rules` | **规则编辑保存（配置 UI 的服务端链路）**：body `{rules:[...]}` 整组提交（非 diff patch）。服务端全链：读原始正文 → **yaml.Node 层手术**（只替换该源 rules 段——严禁 struct 往返，`${ENV}` 占位/注释/键序原样保留）→ `LoadFromRaw` 全量校验（同一校验器）→ **活体预检**（diff 出新增/修改表，源表存在性/order_by/目标表列集与唯一键一致，errors 阻断 422；目标缺表在 ddl_sync=true 且策略非 ignore 时降级 warning——预告启动对账自动建表，缺库仍 422，2026-11-11）→ ModRevision **CAS 写**（`?base=<revision>` 缺失 400、不一致 409「配置已被他人修改，请刷新」）→ 审计 `config.update_rules`。`?check_only=true` = 同链路预演（免 confirm、不写、不审计）。file 形态 409。出参 `{revision, added, removed, modified, report}` |
-| `POST /config/apply-restart` | **应用并重启本节点**：优雅排空退出（与 SIGTERM 同一条 drain 链路：停拉取→排空→位点终值落盘→resign），exit 0 交编排拉起应用新配置（compose `restart: unless-stopped` / k8s 均满足）。confirm=true + 审计 `config.apply_restart`。集群滚动序 = 先 follower 后 leader（顺序错无数据风险只白重启——旧配置=少同步，安全方向）。响应先写出再异步触发停机 |
+| `POST /config/apply-restart` | **应用并重启**：`scope=node`（默认）=仅本节点优雅排空退出（与 SIGTERM 同一条 drain 链路：停拉取→排空→位点终值落盘→resign），exit 0 交编排拉起应用新配置；**`scope=cluster`（2026-11-12 服务级重启）**=接住请求的节点作编排者：从节点注册表取 peers（follower 先 leader 后）逐个向 peer Web API 触发标准 apply-restart 并轮询 peer /healthz 恢复（90s 上限），自己最后重启——响应同步返回逐节点结果（`{scope, peers[], self}`，失败节点标注原因）。peer 认证用共享配置的同一组 Web 凭据；advertise_addr 留空自动解析「出口 IP+web 端口」。单节点 = 无 peers 行为同 node。confirm=true + 审计 `config.apply_restart`（detail 含 scope 与逐节点统计）。Web 路由新增无鉴权 `/healthz`（服务级重启健康探针，此前仅 metrics 端口有） |
 | `POST /leader/resign` | 主动让位（滚动发布用） |
 | `POST /pipeline/pause` | **人工暂停管线**：写 etcd 持久标志 `{prefix}/pipeline-pause`（无 lease，跨重启/失位保持）+ 取消管线 ctx 走优雅停机（排空 + 位点终值落盘）。管线停止但进程/Leader/Web 存活（DDL 审批 gate 继续服务）；当选时发现标志存在则本任期不启动管线。用途：运维窗口（改位点/排查）不用停进程。非 leader 返回错误 |
 | `POST /pipeline/resume` | **恢复人工暂停的管线**：删持久标志 + 等旧流程退出后从 etcd 位点重走全量检查/增量启动（支持暂停期间改位点）。非 leader / 非暂停态返回错误 |
@@ -122,7 +122,7 @@ etcd 治理（P2，leader 侧 `gcLoop` 每小时）：① stock 死标记（白�
 
 ## 8. 配置编辑与重载（rules CRUD 进 UI）
 
-高频配置变更（加表/减表/改 mask/exclude）的 Web 化闭环，2026-11 落地：
+高频配置变更（加表/减表/改 mask/exclude）的 Web 化闭环，2026-11 落地。**2026-11-12 UI 收敛**：规则编辑唯一入口=「复制规则」页的编辑规则抽屉（RuleEditor，覆盖源库/表两级增删改+预检+保存+应用重启）；生效配置页原「规则视图（按库）」页签（RulesManage）与之完全重合，已删除——生效配置页仅保留只读配置文档视图：
 
 - **保存链路**（`PUT /sources/{sid}/rules`）：规则段 yaml.Node 手术合并 →
   同一校验器全量校验 → 活体预检（只核对本次新增/修改表——存量表上次启动

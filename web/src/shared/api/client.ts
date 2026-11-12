@@ -2,6 +2,7 @@ import type {
   ApiCredentials,
   ApiEnvelope,
   AuditEntry,
+  ClusterRestartResult,
   DDLRecord,
   EffectiveRule,
   GetRulesResult,
@@ -214,15 +215,35 @@ export class ApiClient {
    */
   putRulesOf(sid: string, base: number, rules: RuleGroup[], checkOnly: boolean) {
     const query = checkOnly ? 'check_only=true' : `confirm=true&base=${base}`
+    // Go nil 切片 JSON 序列化为 null（added/removed/modified/report.errors/
+    // report.warnings 空时均为 null）——在此归一化为 []，消费方免判空
+    //（2026-11-12：预检面板对 null 取 .length 直接白屏）。
     return this.request<PutRulesResult>(this.sourcePath(sid, `/rules?${query}`), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ rules }),
-    })
+    }).then((res) => ({
+      ...res,
+      added: res.added ?? [],
+      removed: res.removed ?? [],
+      modified: res.modified ?? [],
+      report: res.report && {
+        checked: res.report.checked ?? 0,
+        errors: res.report.errors ?? [],
+        warnings: res.report.warnings ?? [],
+      },
+    }))
   }
 
-  /** 优雅排空退出（位点终值+resign），由编排拉起以应用新配置。 */
-  applyRestart() {
-    return this.request<void>('/config/apply-restart?confirm=true', { method: 'POST' })
+  /**
+   * 应用并重启：scope=node=仅本节点；scope=cluster=服务级（编排者逐 peer
+   * 触发重启并等其恢复，自己最后——集群分钟级、单节点秒级）。返回逐节点结果。
+   */
+  applyRestart(scope: 'node' | 'cluster' = 'node') {
+    const scopeQuery = scope === 'cluster' ? '&scope=cluster' : ''
+    return this.request<ClusterRestartResult | void>(
+      `/config/apply-restart?confirm=true${scopeQuery}`,
+      { method: 'POST' },
+    )
   }
 }

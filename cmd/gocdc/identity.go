@@ -6,7 +6,9 @@ import (
 	"encoding/hex"
 	"fmt"
 	"hash/fnv"
+	"net"
 	"os"
+	"time"
 )
 
 // deriveNodeID 节点 ID（配置未填时派生 hostname-8位随机，k8s 多副本可用
@@ -33,4 +35,22 @@ func deriveServerID(nodeID string) uint32 {
 		return id
 	}
 	return 1 // fnv32 全零概率 1/2^32，防御 0 非法
+}
+
+// resolveAdvertiseAddr 集群 peer 可达地址（服务级重启逐节点触发用）：
+// webAddr（bind 形态，如 :8060）取端口部分 + 本机出口 IP（UDP dial 探测，
+// 失败退回 127.0.0.1）。webAddr 无端口或全空 → 空串（peer 编排跳过）。
+func resolveAdvertiseAddr(webAddr string) string {
+	_, port, err := net.SplitHostPort(webAddr)
+	if err != nil || port == "" {
+		return ""
+	}
+	ip := "127.0.0.1"
+	if conn, err := net.DialTimeout("udp", "8.8.8.8:80", time.Second); err == nil {
+		if la := conn.LocalAddr().(*net.UDPAddr); la.IP != nil && !la.IP.IsLoopback() {
+			ip = la.IP.String()
+		}
+		_ = conn.Close()
+	}
+	return ip + ":" + port
 }

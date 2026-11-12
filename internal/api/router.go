@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"net/http"
 	"strings"
 	"time"
 
@@ -21,8 +22,8 @@ import (
 // 未就绪时返回 nil（handler 显式 409，绝不 nil deref）；etcd 状态面（Store/
 // Markers）装配期即构造，恒可用。
 type SourceDeps struct {
-	ID     string
-	Store  *position.Store
+	ID      string
+	Store   *position.Store
 	Markers interface {
 		ResetTable(ctx context.Context, db, table string) error
 	}
@@ -81,6 +82,12 @@ type Deps struct {
 	// Shutdown 优雅停机触发（SIGTERM 同链路：停拉取→排空→位点终值→resign，
 	// 编排拉起应用新配置；nil = 未接入 → 409）。
 	Shutdown func()
+	// ClusterRestart 服务级重启编排（scope=cluster 时调用）：逐 peer 触发
+	// apply-restart 并等其恢复，自己最后重启（handler 在响应写出后调 Shutdown）。
+	// error 非空 = 编排未开始即失败（如注册表列举失败）——handler 返回 500 且
+	// 不触发任何重启（绝不静默降级成单节点重启，其余节点会留在旧配置）。
+	// nil = 未接入 → scope=cluster 降级为重启本节点。
+	ClusterRestart func(ctx context.Context) (ClusterRestartResult, error)
 	// ConfigKey 配置中心 key（etcd 形态展示用）。
 	ConfigKey string
 }
@@ -141,6 +148,11 @@ func NewRouter(deps Deps, auth AuthConfig) *gin.Engine {
 	// ── 写操作（cluster 级）──
 	api.POST("/leader/resign", h.resign)
 	api.POST("/config/apply-restart", h.applyRestart)
+
+	// /healthz：Web 端口存活探针（无鉴权、无信息，根级注册——放 api 组会带鉴权、
+	// 不注册则落 NoRoute 返回 SPA HTML 无法探活）。服务级重启编排等 peer 恢复时
+	// 轮询 peer Web 地址用（2026-11-12；此前 healthz 只在 metrics 端口）。
+	r.GET("/healthz", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
 
 	// The static shell is public so it can collect credentials. Unknown API paths
 	// still follow the Basic auth boundary and never fall through to index.html.

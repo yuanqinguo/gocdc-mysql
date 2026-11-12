@@ -289,6 +289,33 @@ a {
   background: rgba(255, 255, 255, 0.04);
 }
 
+/* 函数式弹窗（modal.confirm/info 等 confirm 变体）：结构里没有 header/footer
+   （header 被 antd 置 display:none，标题走 confirm-title），且 antd 自身把该
+   变体的 body 内边距清零——不补齐时标题/表单整体贴死左边缘（2026-11-12
+   用户验收反馈）。规格对齐常规弹窗：body 22px 侧距 + 标题字号 + 底部按钮带
+   分隔线。 */
+.ant-modal .ant-modal-confirm-body-wrapper {
+  padding: 18px 22px 20px;
+}
+
+.ant-modal .ant-modal-confirm-title {
+  color: var(--text);
+  font-size: 15px;
+  letter-spacing: 0.01em;
+  line-height: 1.45;
+}
+
+.ant-modal .ant-modal-confirm-content {
+  margin-top: 16px;
+  color: var(--text-3);
+}
+
+.ant-modal .ant-modal-confirm-btns {
+  margin: 18px 0 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--line-soft);
+}
+
 .ant-dropdown .ant-dropdown-menu {
   padding: 6px;
   border: 1px solid var(--line);

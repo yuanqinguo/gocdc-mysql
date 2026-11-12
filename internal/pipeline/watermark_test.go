@@ -109,8 +109,12 @@ func TestCompileRules_Errors(t *testing.T) {
 	if _, err := CompileRules([]config.Rule{{Schema: "db"}}); err == nil {
 		t.Fatal("缺 sinks 应报错")
 	}
-	if _, err := CompileRules([]config.Rule{{Schema: "db", Sinks: &config.RuleSinks{}}}); err == nil {
-		t.Fatal("tables 为空应报错")
+	if cr, err := CompileRules([]config.Rule{{Schema: "db", Sinks: &config.RuleSinks{MySQL: config.RuleSink{Enabled: true}}}}); err != nil {
+		t.Fatalf("空组（预留组）应编译通过: %v", err)
+	} else if cr.KnownTables() != 0 || cr.SchemaHasTables("db") {
+		t.Fatal("空组不得产表规则或注册 schema（DDL 放行判据）")
+	} else if len(cr.Groups()) != 1 {
+		t.Fatal("空组应保留在 Groups 供 Web 展示")
 	}
 	if _, err := CompileRules([]config.Rule{{Schema: "db",
 		Sinks:  &config.RuleSinks{MySQL: config.RuleSink{Enabled: true}},

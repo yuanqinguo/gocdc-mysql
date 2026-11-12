@@ -247,6 +247,40 @@ func (h apiHandlers) applyRestart(c *gin.Context) {
 	if !requireConfirm(c) {
 		return
 	}
+	// scope=cluster：服务级重启——编排者逐 peer 触发 apply-restart 并等其恢复
+	//（follower 先 leader 后，自己最后），响应带逐节点结果。编排同步执行后
+	// 才写响应（客户端需容忍分钟级等待）；请求 ctx 断开不影响已开始的编排
+	//（独立超时上下文）。peer 触发失败不中止（结果面板逐节点标注，人工处置）。
+	if c.DefaultQuery("scope", "node") == "cluster" && h.ClusterRestart != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+		defer cancel()
+		res, err := h.ClusterRestart(ctx)
+		if err != nil {
+			// 编排未开始即失败（如注册表列举失败）：不触发任何重启——静默降级
+			// 成单节点重启会把其余节点留在旧配置。500 + 可重试提示。
+			detail := fmt.Sprintf("node=%s scope=cluster error=%v", h.NodeID, err)
+			audit(auditOrNil(h.Audit), c, auditConfigApplyRestart, detail, err)
+			respondErr(c, 500, err.Error())
+			return
+		}
+		okCount := 0
+		for _, p := range res.Peers {
+			if p.Ok {
+				okCount++
+			}
+		}
+		detail := fmt.Sprintf("node=%s scope=cluster peers=%d ok=%d failed=%d",
+			h.NodeID, len(res.Peers), okCount, len(res.Peers)-okCount)
+		audit(auditOrNil(h.Audit), c, auditConfigApplyRestart, detail, nil)
+		respondOK(c, res)
+		go func() { // 结果已写出，再触发自身停机（编排者恒最后）
+			time.Sleep(applyRestartDelay)
+			logging.L().Warn("apply-restart：服务级重启收尾——本节点（编排者）优雅停机，等编排拉起",
+				zap.String("node", h.NodeID))
+			h.Shutdown()
+		}()
+		return
+	}
 	detail := "node=" + h.NodeID
 	audit(auditOrNil(h.Audit), c, auditConfigApplyRestart, detail, nil)
 	respondDone(c)

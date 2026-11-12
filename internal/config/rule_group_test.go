@@ -282,3 +282,18 @@ observability:
 		t.Fatalf("表级脱敏解析: %+v", g.Tables[1].MaskColumns)
 	}
 }
+
+// 空组（预留组）合法：先建组预留源库/目标库映射，后补表。空组零约束通过校验。
+func TestValidate_EmptyTablesGroupAllowed(t *testing.T) {
+	errs := runV(t, func(c *Config) {
+		c.Sources[0].Rules = []Rule{{
+			Schema: "edu.mall.admin", DDLPolicy: "auto",
+			Sinks:          &RuleSinks{MySQL: RuleSink{Enabled: true}},
+			TargetDatabase: "edu.mall.merge",
+			Tables:         nil,
+		}}
+	})
+	if len(errs) != 0 {
+		t.Fatalf("空组应合法: %v", errs)
+	}
+}

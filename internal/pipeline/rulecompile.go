@@ -23,8 +23,9 @@ type CompiledRules struct {
 	schemas map[string]bool        // 出现过表规则的小写 schema（DDL 放行判据）
 }
 
-// CompileRules 编译组规则；结构性错误（缺 sinks/tables 为空/缺 do_stock/重复表）
-// 返回错误——生产路径 Validate 已前置把关，此处为直接调用方的最后防线。
+// CompileRules 编译组规则；结构性错误（缺 sinks/缺 do_stock/重复表）返回错误——
+// 生产路径 Validate 已前置把关，此处为直接调用方的最后防线。空组=预留组合法
+//（不产表规则、不注册 schema）。
 func CompileRules(rules []config.Rule) (*CompiledRules, error) {
 	cr := &CompiledRules{
 		tables:  map[string]*model.Rule{},
@@ -35,9 +36,8 @@ func CompileRules(rules []config.Rule) (*CompiledRules, error) {
 		if g.Sinks == nil {
 			return nil, fmt.Errorf("规则编译: 组 %s 缺 sinks", g.Schema)
 		}
-		if len(g.Tables) == 0 {
-			return nil, fmt.Errorf("规则编译: 组 %s tables 为空（白名单须逐表列出）", g.Schema)
-		}
+		// 空组合法（预留组）：不产表规则、不注册 schema（SchemaHasTables 保持
+		// false——该库 DDL 维持白名单外过滤），仅 Groups() 可见供 Web 展示。
 		cr.groups = append(cr.groups, *g)
 		ddl := g.DDLPolicy
 		if ddl == "" {

@@ -173,6 +173,22 @@ export interface PutRulesResult {
   report: PreflightReport
 }
 
+/** 服务级重启：单个节点结果 */
+export interface PeerRestartResult {
+  node_id: string
+  addr: string
+  role: string
+  ok: boolean
+  detail?: string
+}
+
+/** 服务级重启结果（scope=cluster；编排者自身在响应后异步重启） */
+export interface ClusterRestartResult {
+  scope: string
+  peers: PeerRestartResult[]
+  self: string
+}
+
 /** GET /sources/{sid}/rules 出参（组形态原样 + PUT base） */
 export interface GetRulesResult {
   revision: number

@@ -122,6 +122,10 @@ func buildSourceDeps(rt *app, src *sourceState) *api.SourceDeps {
 func buildAdminDeps(st *config.Startup, cfg *config.Config, cfgKey string, cfgKV *etcdx.KV,
 	coord *coordination, rt *app, stop context.CancelFunc) api.Deps {
 
+	// 服务级重启编排（scope=cluster）：peer 逐个排空重启，自己最后。
+	// stop=leadCtx cancel（与 Shutdown 注入同一停机链路）。
+	cr := newClusterRestarter(cfg, coord.kv, coord.prefix, coord.nodeID, func() { stop() })
+
 	// prefix=集群前缀（NewAuditStore 契约，内部自拼 /events/audit）——此前多传
 	// 一段导致真实 key 双重拼接为 {prefix}/events/audit/events/audit（55 组
 	// PP-09 抓到：etcd 侧运维观察路径与文档/etcdctl 直觉不符）
@@ -137,8 +141,9 @@ func buildAdminDeps(st *config.Startup, cfg *config.Config, cfgKey string, cfgKV
 		Audit:      auditStore,
 		Sources:    make(map[string]*api.SourceDeps, len(cfg.Sources)),
 
-		Preflight: rt.preflightRules,
-		Shutdown:  stop,
+		Preflight:      rt.preflightRules,
+		Shutdown:       stop,
+		ClusterRestart: cr.restartService,
 	}
 	if st.ConfigSource == "etcd" && cfgKV != nil {
 		deps.ConfigStore = api.NewEtcdConfigStore(cfgKV, cfgKey)

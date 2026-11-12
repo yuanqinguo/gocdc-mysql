@@ -300,10 +300,10 @@ func validateSourceSpec(spec *SourceSpec, prefix string, errf func(string, ...an
 		if r.TargetDatabase != "" && !schemaRe.MatchString(r.TargetDatabase) {
 			errf("%s.target_database=%q 含非法字符（库名允许点，如 edu.mall.merge；禁止空白/反引号/路径符）", path, r.TargetDatabase)
 		}
-		if len(r.Tables) == 0 {
-			errf("%s.tables 不能为空（组形态即白名单：逐表列出要同步的表）", path)
-			continue
-		}
+		// 空组合法（2026-11-12）：先建组（预留源库/目标库映射）后补表——白名单
+		// 语义下空组 = 显式不同步（编译不产表规则、SchemaHasTables 不注册该库，
+		// 该库 DDL 维持白名单外过滤；核对/stock/topic 展开对空表集天然空转）。
+		// 表内字段校验（do_stock/order_by）仅在存在表条目时生效。
 		seenT := map[string]bool{}
 		var fallbackTables []string // ddlAutoCreate 下落同名回退的表（组级聚合报错）
 		for j := range r.Tables {

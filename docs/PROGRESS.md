@@ -257,6 +257,64 @@ metrics 端口不在 web 端口（start_node 判就绪用 /api/v1/status）；sh
 存 curl 命令时 --noproxy * 无引号在展开期 glob 成文件列表（改函数封装）；
 setsid 后台 $! 不可靠（pgrep+cwd 探活）；套件非幂等（绝对计数断言），
 必须先 00_reset 再场景。
+**服务级重启落地（2026-11-12 用户决策「应用并重启=服务级，集群全部节点」）**：
+语义先答清（用户关键追问）：**主从提升不重启进程——提升者用的还是它自己上次
+启动时的配置**（配置只在进程启动读一次）；所以只重启当前节点=它变回带新配置
+的热备，真 leader 仍跑旧配置，改动未生效。实现：编排者模式——`scope=cluster`
+时接住请求的节点从节点注册表（lease 绑定，死节点自动消失）取 peers（排除
+自己，follower 先 leader 后），逐个向 peer Web API 触发标准 apply-restart
+（共享配置=同一组 Web 凭据，peer 自审计）+ 轮询 peer /healthz 恢复（90s 上限，
+先等退出再等回来），自己最后重启；响应同步带逐节点结果（peer 失败/超时不中
+止编排，标注人工处置）。连带：① advertise_addr 缺省解析补实现（注释承诺的
+「本机IP:web端口」从未实现——出口 IP UDP 探测 + web 端口，注册时写入）；
+② Web 路由新增无鉴权 /healthz（编排健康探针；此前 healthz 只在 metrics 端口，
+Web 端口未知路径落 SPA 返 HTML 无法探活）；③ 单节点=注册表只有自己，行为与
+旧「重启本节点」一致；④ 前端按钮改「应用并重启服务」+ 确认框集群语义 + 逐
+节点结果面板；⑤ Go nil 切片 JSON null 白屏修复（api 层归一化 null→[]：预检
+报告 errors/warnings/added/removed/modified 空时全为 null，前端 .length 白屏
+——自动建表流程频繁产生「零错误+警告」报告必踩）。测试：cluster_restart_test
+（地址归一/leader 排序/fanout 三分支/单节点语义）+ ruleDraft null 用例；
+RUNBOOK §9.1-2 重写 + arch13 API 行 + TESTCASES API-15。L2/L3 双节点集群场景
+未实跑 → **已补实跑（2026-11-12，.verify/ddlcluster/ 双节点集群，四轮端到端收敛至 25 PASS / 0 FAIL）**：
+- 真 HA 集群（etcd + 双 MySQL + 两节点选举，共享配置正文，advertise_addr 留空验证自动解析）。
+- 三轮迭代：leader 发起/follower 发起交替编排，每轮改配置 → scope=cluster 重启 → 断言两节点
+  effective 均含新表 + 目标自动建表全量行数一致 + node_id 双变证真重启 + 增量探针续流。
+- **实跑抓到并修复 4 个缺陷**：① /healthz 误注册进 api 组（带鉴权）且裸 /healthz 落 NoRoute 返
+  SPA HTML——健康探针永不通过 → 挪路由根级；② listPeers 把 etcd 瞬时失败静默吞成「无 peers=
+  单节点」→ 跳过全部 peer 只重启自己（其余节点留旧配置）→ 显式上抛 + 重试 3 次 + handler 500
+  不触发任何重启；③ 注册表初始 Role 恒 leader（从未当选者也自称 leader，编排排序失真）→ 集群
+  初始如实标 follower；④ advertise_addr 缺省解析从未实现 → 出口 IP UDP 探测 + web 端口。
+- **运维语义实锤**：集群共享正文形态 server_id 必须为 0 派生（显式同值=后启动者互踢 fail-fast
+  循环，检查器正确拦截——RUNBOOK §9.1-5 的活案例）。
+- 测试脚本教训：docker exec mysql 中文 INSERT 必须带 --default-character-set=utf8mb4（否则
+  latin1 化存储，按原文匹配恒空——产品复制是字节级忠实的，源/目标 HEX 一致）。
+- 套件资产：00_reset / node_runner / body_cluster / 30_e2e（25 断言），日志 logs/。
+**前端弹窗间距修复（2026-11-12 用户验收反馈）**：新增/修改源库、增加/修改表等
+弹窗（web modal.confirm 函数式）内容区整体贴死左边缘——根因=styles.css 给
+`.ant-modal-content` 设 padding:0 且内边距靠 header/body/footer 分担，而 confirm
+变体（antd v5）把 body 内边距清零且 header display:none。修复=按
+`.ant-modal-confirm-body-wrapper` 补 18/22/20 内边距 + confirm-title 字号对齐 +
+btns 区分隔线（注意：裸类 `ant-modal-confirm` 挂在 modal **root** 上是
+.ant-modal 的祖先，后代选择器永不匹配——必须用带连字符的子元素类）。
+连带修 drill 表操作列 160→190px（修改表/移除表两按钮 184px 被右缘裁剪）。
+**验证通路（沉淀复用）**：Windows node+puppeteer-core+本机 Chrome 无头截图
+（.verify/ui_shots/shots.mjs，页面+13 个弹窗/抽屉交互流，登录走 SPA 表单非
+Basic auth；antd 两字按钮文本插空格「取 消」——文本匹配须归一化空白），
+修复前后视觉比对确认；vitest 53/53 + typecheck 绿。
+**规则编辑入口收敛（2026-11-12 用户决策「config 页与复制规则页完全重合」）**：
+ConfigPage 删除「规则视图（按库）」页签（RulesManage 530 行 + rulesManageLogic
+模块 + 10 用例一并删除——与 RuleEditor 抽屉完全重复的编辑器），只留只读配置
+文档视图（打码 JSON + 复制）；规则编辑唯一入口=「复制规则」页编辑规则抽屉
+（RuleEditor 能力覆盖面 ⊇ RulesManage：加库/移除库/组字段/加表/移除表/全字段
+表编辑/预检/保存/应用重启/CAS）。活体验证：/config 无页签无新增源库按钮、
+/rules 抽屉加库入口完好（shots2.mjs DOM 审计+截图）。**vitest 慢的根因与解法**：
+tests 仅 4s，collect 754s + environment 211s——/mnt/d 的 9p 文件系统 I/O。
+（test|typecheck|build|all）：rsync 到 WSL 原生 ext4
+（~/gocdc-web）跑，VITE_OUT_DIR 直写 internal/api/dist——全链 test+typecheck+
+build 从 10 分钟降到 **28 秒**（vitest 单跑 23s 含首次 npm install；build 7s）。
+**生效配置页保留（2026-11-12 用户终审）**：曾一度提议整页废弃，用户复核后
+定论「这个 JSON 信息更全，保留」——生效配置页维持收敛后单视图形态
+（打码 JSON + 高亮 + 复制），导航 6 项不变；后续会话不要再提议删除。
 **全矩阵回归（2026-11-12 收官，用户令「所有用例都跑一次」）**：L1 Windows
 build/vet 双 tags/全包单测绿；WSL -race 全仓 19 包绿；L2 testcontainers
 18 包全绿（l2_nokafka_1111.log + kafka 包补跑）；L3 v2 12 组 111 断言全绿

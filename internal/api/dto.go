@@ -40,27 +40,27 @@ type SourceStatus struct {
 	ID    string `json:"id"`
 	Phase string `json:"phase"` // starting | ready | failed（装配期状态机，PRD 05 §3）
 
-	PipelineState   string    `json:"pipeline_state"`                  // Pipeline* 常量之一（failed 装配期 = idle）
-	PipelineError   string    `json:"pipeline_error,omitempty"`        // paused 首因错误 / failed 装配错误
-	PipelineSince   time.Time `json:"pipeline_since,omitempty"`        // 进入当前状态的时刻
-	PausedByOp      bool      `json:"pipeline_paused_by_op,omitempty"` // paused 源于人工暂停
-	EventLagSeconds *int64    `json:"event_lag_seconds,omitempty"`     // 距最近业务写入秒
-	CaughtUp        *bool     `json:"caught_up,omitempty"`             // 追平口径：nil=无采样
-	MasterLagBytes  *float64  `json:"master_lag_bytes,omitempty"`      // 与源库字节差
-	UseGTID         bool      `json:"use_gtid"`                        // 该源 source.use_gtid
-	Position        *PositionData `json:"position,omitempty"`           // etcd 已持久化位点摘要（无位点省略）
+	PipelineState   string        `json:"pipeline_state"`                  // Pipeline* 常量之一（failed 装配期 = idle）
+	PipelineError   string        `json:"pipeline_error,omitempty"`        // paused 首因错误 / failed 装配错误
+	PipelineSince   time.Time     `json:"pipeline_since,omitempty"`        // 进入当前状态的时刻
+	PausedByOp      bool          `json:"pipeline_paused_by_op,omitempty"` // paused 源于人工暂停
+	EventLagSeconds *int64        `json:"event_lag_seconds,omitempty"`     // 距最近业务写入秒
+	CaughtUp        *bool         `json:"caught_up,omitempty"`             // 追平口径：nil=无采样
+	MasterLagBytes  *float64      `json:"master_lag_bytes,omitempty"`      // 与源库字节差
+	UseGTID         bool          `json:"use_gtid"`                        // 该源 source.use_gtid
+	Position        *PositionData `json:"position,omitempty"`              // etcd 已持久化位点摘要（无位点省略）
 }
 
 // SourceSummary GET /sources 源清单项（聚合总览页数据源，多源 PRD 06 §1.2）。
 type SourceSummary struct {
 	ID          string   `json:"id"`
-	SourceAddr  string   `json:"source_addr"`            // 源库地址（不含凭据）
-	TargetAddrs []string `json:"target_addrs"`           // 启用下游地址集
-	Sinks       []string `json:"sinks"`                  // 启用 sink 名集（mysql/kafka/rocketmq）
-	Rules       int      `json:"rules"`                  // 规则组数
-	Tables      int      `json:"tables"`                 // 白名单表数
-	State       string   `json:"state"`                  // pipeline_state；装配 failed 时为 failed(startup)
-	Error       string   `json:"error,omitempty"`        // failed/paused 时的错误摘要
+	SourceAddr  string   `json:"source_addr"`     // 源库地址（不含凭据）
+	TargetAddrs []string `json:"target_addrs"`    // 启用下游地址集
+	Sinks       []string `json:"sinks"`           // 启用 sink 名集（mysql/kafka/rocketmq）
+	Rules       int      `json:"rules"`           // 规则组数
+	Tables      int      `json:"tables"`          // 白名单表数
+	State       string   `json:"state"`           // pipeline_state；装配 failed 时为 failed(startup)
+	Error       string   `json:"error,omitempty"` // failed/paused 时的错误摘要
 }
 
 // pipeline_state 取值（13 §3）。
@@ -236,3 +236,21 @@ const (
 	noteWebApprove = "web approve"
 	noteWebSkip    = "web skip"
 )
+
+// ── 服务级重启（2026-11-12：应用并重启=集群全部节点逐个排空重启，编排者最后）──
+
+// PeerRestartResult 单个 peer 的重启结果。
+type PeerRestartResult struct {
+	NodeID string `json:"node_id"`
+	Addr   string `json:"addr"`
+	Role   string `json:"role"` // 触发时的角色（leader 排最后触发）
+	Ok     bool   `json:"ok"`
+	Detail string `json:"detail,omitempty"` // 失败原因（触发失败/健康等待超时）
+}
+
+// ClusterRestartResult 服务级重启结果（编排者自身在响应写出后异步重启）。
+type ClusterRestartResult struct {
+	Scope string              `json:"scope"` // cluster
+	Peers []PeerRestartResult `json:"peers"`
+	Self  string              `json:"self"` // 本节点处置说明
+}

@@ -77,7 +77,6 @@ export function validateDraft(drafts: GroupDraft[]): string[] {
     else if (seenSchema.has(g.schema.trim().toLowerCase())) errors.push(`源库 ${g.schema} 重复（一组一库）`)
     else seenSchema.add(g.schema.trim().toLowerCase())
     if (!g.sinks.mysql && !g.sinks.kafka && !g.sinks.rocketmq) errors.push(`源库 ${label}：至少启用一个下游 sink`)
-    if (g.tables.length === 0) errors.push(`源库 ${label}：tables 不能为空（白名单逐表列出）`)
     const seenTable = new Set<string>()
     g.tables.forEach((t, ti) => {
       const tlabel = t.table.trim() || `表 ${ti + 1}`
@@ -93,9 +92,9 @@ export function validateDraft(drafts: GroupDraft[]): string[] {
 /** diff + 预检摘要（确认框文案）。 */
 export function diffSummaryText(result: PutRulesResult): string {
   const parts: string[] = []
-  if (result.added.length > 0) parts.push(`新增 ${result.added.length} 表`)
-  if (result.removed.length > 0) parts.push(`移除 ${result.removed.length} 表`)
-  if (result.modified.length > 0) parts.push(`修改 ${result.modified.length} 表`)
+  if ((result.added ?? []).length > 0) parts.push(`新增 ${result.added.length} 表`)
+  if ((result.removed ?? []).length > 0) parts.push(`移除 ${result.removed.length} 表`)
+  if ((result.modified ?? []).length > 0) parts.push(`修改 ${result.modified.length} 表`)
   return parts.length > 0 ? parts.join('，') : '无表级变化'
 }
 
