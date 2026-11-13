@@ -24,6 +24,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"gocdc/internal/config"
 	"os"
 	"os/signal"
 	"runtime"
@@ -59,7 +60,7 @@ type options struct {
 func parseFlags(args []string) (*options, error) {
 	opts := &options{}
 	fs := flag.NewFlagSet("gocdc", flag.ContinueOnError)
-	fs.StringVar(&opts.cluster, "cluster", "", "集群名覆盖（缺省取引导文件 cluster，再缺省 gocdc-mysql；决定协调面前缀 /gocdc/{cluster}）")
+	fs.StringVar(&opts.cluster, "cluster", config.ServerFullName, "集群名覆盖（缺省取引导文件 cluster，再缺省 gocdc-mysql；决定协调面前缀 /gocdc/{cluster}）")
 	fs.StringVar(&opts.etcdAddrs, "etcd", "", "协调面 etcd 覆盖，逗号分隔（缺省取环境变量 ETCD_HOSTS，再缺省取引导文件；无引导文件时兼作配置中心）")
 	fs.StringVar(&opts.configKey, "config-key", "", "配置 key 路径覆盖（缺省取引导桩 config_center.key，再缺省 /config/edu.mall.gocdc/system）")
 	fs.StringVar(&opts.configFile, "config-file", "", "引导/配置文件路径覆盖（默认工作目录 config.local.yml）")
