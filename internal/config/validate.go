@@ -428,12 +428,16 @@ func checkCrossSourceTargets(c *Config, errf func(string, ...any)) {
 	seen := map[string]owner{}
 	add := func(kind, key, sid, target string) {
 		if prev, dup := seen[key]; dup {
-			// 源内同名冲突（大小写变体等）是 V3 表级去重的报错面，
-			// V4 只裁跨源（同源重复表在 rules 校验已拦）
-			if prev.sid != sid {
-				errf("跨源目标冲突（%s）：sources/%s 与 sources/%s 解析到同一目标 %q（两源互覆/乱序，D6 拦死）",
-					kind, prev.sid, sid, target)
+			// 源内跨组同目标表（2026-11-12 补拦）：同源两个库的同名表解析到同一
+			// 目标表=事件互覆（V3 只拦同组内重复表，跨组+跨库拦不到）——与跨源
+			// 冲突同级的数据互覆，一并拦死
+			if prev.sid == sid {
+				errf("源内目标表冲突（%s）：sources/%s 内两组规则解析到同一目标 %q（同名表互覆，D6 拦死）",
+					kind, sid, target)
+				return
 			}
+			errf("跨源目标冲突（%s）：sources/%s 与 sources/%s 解析到同一目标 %q（两源互覆/乱序，D6 拦死）",
+				kind, prev.sid, sid, target)
 			return
 		}
 		seen[key] = owner{sid, target}

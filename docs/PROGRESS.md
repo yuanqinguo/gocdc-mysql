@@ -289,6 +289,19 @@ RUNBOOK §9.1-2 重写 + arch13 API 行 + TESTCASES API-15。L2/L3 双节点集�
 - 测试脚本教训：docker exec mysql 中文 INSERT 必须带 --default-character-set=utf8mb4（否则
   latin1 化存储，按原文匹配恒空——产品复制是字节级忠实的，源/目标 HEX 一致）。
 - 套件资产：00_reset / node_runner / body_cluster / 30_e2e（25 断言），日志 logs/。
+**双源稳定性测试（2026-11-12，.verify/stable/ 套件）**：全新容器组
+stable-src1(:13606)/stable-src2(:13607)（各 2 库 × 2 表=8 表）+ stable-dst
+(:13608，4 个目标库预建) + stable-etcd(:13679)，双节点 stable 集群
+（:18081/:18082，多源配置 sources[]×2）。负载发生器 600s×273 tick 对 8 表
+随机 INSERT/UPDATE/DELETE（INS=140/UPD=86/DEL=24，零错误），30s 采样断言
+8 表源=目标行数逐点相等（含穿越第 300s 服务级重启），终局 count+max_id
+全收敛 ×2（stability_run + final_check 独立对账一致）。**实跑抓到产品级
+校验缺口**：同源跨库同名表解析到同一目标表（s1_db1.t_data 与 s1_db2.t_data
+→ td_s1.t_data）V4 只裁跨源、源内静默放行=事件互覆数据污染陷阱 →
+checkCrossSourceTargets 补「源内目标表冲突」拦截 + 单测
+TestV4_IntraSourceTargetCollision；stable 正文改为每库独立目标库。资产：
+00_reset/node_runner(stable_node_runner)/body_stable/stable_workload/up/
+stability_run/final_check/down，日志 workload.log/samples.log。
 **前端弹窗间距修复（2026-11-12 用户验收反馈）**：新增/修改源库、增加/修改表等
 弹窗（web modal.confirm 函数式）内容区整体贴死左边缘——根因=styles.css 给
 `.ant-modal-content` 设 padding:0 且内边距靠 header/body/footer 分担，而 confirm

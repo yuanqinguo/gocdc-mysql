@@ -62,7 +62,7 @@ func TestV1FormRejected(t *testing.T) {
 }
 
 // TestV1FormDualWriteRejected 顶层旧字段与 sources 同时给出：v1 检测先行报错
-//（不做双写裁决——两形态不允许共存）。
+// （不做双写裁决——两形态不允许共存）。
 func TestV1FormDualWriteRejected(t *testing.T) {
 	res := loadYML(t, v1Body+"\nsources:\n  - id: other\n")
 	if !containsErr(res.Errors, "v1 单源形态已移除") {
@@ -140,6 +140,37 @@ func TestV1_Count(t *testing.T) {
 
 // TestV4_CrossTargets 跨源目标不相交（V4）：MySQL 三元组 / Kafka topic /
 // RocketMQ topic 冲突各分支 + 同库不同目标库合法。
+// 源内跨库目标表冲突（2026-11-12 补拦）：同源两组规则（不同 schema）解析到
+// 同一目标表 = 事件互覆，与跨源冲突同级拦死。
+func TestV4_IntraSourceTargetCollision(t *testing.T) {
+	errs := runV(t, func(c *Config) {
+		c.Sources[0].Rules = []Rule{
+			{Schema: "db1", DDLPolicy: "auto", TargetDatabase: "merge",
+				Sinks:  &RuleSinks{MySQL: RuleSink{Enabled: true}},
+				Tables: []TableRule{{Table: "t1", OrderByColumn: "id", DoStock: boolPtr(true)}}},
+			{Schema: "db2", DDLPolicy: "auto", TargetDatabase: "merge",
+				Sinks:  &RuleSinks{MySQL: RuleSink{Enabled: true}},
+				Tables: []TableRule{{Table: "t1", OrderByColumn: "id", DoStock: boolPtr(true)}}},
+		}
+	})
+	wantErrs(t, errs, "源内目标表冲突（mysql）")
+
+	// 同源两组、目标库不同 → 合法
+	errs = runV(t, func(c *Config) {
+		c.Sources[0].Rules = []Rule{
+			{Schema: "db1", DDLPolicy: "auto", TargetDatabase: "merge1",
+				Sinks:  &RuleSinks{MySQL: RuleSink{Enabled: true}},
+				Tables: []TableRule{{Table: "t1", OrderByColumn: "id", DoStock: boolPtr(true)}}},
+			{Schema: "db2", DDLPolicy: "auto", TargetDatabase: "merge2",
+				Sinks:  &RuleSinks{MySQL: RuleSink{Enabled: true}},
+				Tables: []TableRule{{Table: "t1", OrderByColumn: "id", DoStock: boolPtr(true)}}},
+		}
+	})
+	if len(errs) != 0 {
+		t.Fatalf("同源不同目标库应合法: %v", errs)
+	}
+}
+
 func TestV4_CrossTargets(t *testing.T) {
 	base := func() Config {
 		c := validConfig()
