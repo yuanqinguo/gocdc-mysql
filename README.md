@@ -2,7 +2,7 @@
 
 <p align="center">
   <b>MySQL CDC in a single Go binary — binlog → MySQL / Kafka / RocketMQ,<br>
-  with built-in HA, DDL approval and field masking.</b>
+  with built-in HA, multi-source aggregation, DDL approval &amp; reconciliation, field masking and a web console.</b>
 </p>
 
 <p align="center">
@@ -182,7 +182,7 @@ single-binary end of the spectrum.
 | [docs/GUIDE.md](docs/GUIDE.md) (中文) | Full user guide: source/target requirements, every config field, deployment topologies, DDL handling, MQ topics, production checklist, FAQ |
 | [docs/RUNBOOK.md](docs/RUNBOOK.md) (中文) | Operations runbook: position rewind, restock, failover drills, etcd failures, DDL approvals, multi-source ops (§9) |
 | [docs/arch/](docs/arch/README.md) (中文) | 11 design documents: pipeline parallelism, delivery semantics, snapshot protocol, DDL strategy, backpressure, observability |
-| [docs/prd/](docs/prd/README.md) (中文) | Multi-source PRD: config v2, etcd key migration, per-source failure isolation, source-scoped API/Web |
+| [docs/prd/](docs/prd/README.md) (中文) | Multi-source PRD: `sources[]` config, etcd key migration, per-source failure isolation, source-scoped API/Web |
 | [deploy/README.md](deploy/README.md) | Demo topology and verification commands |
 | [docs/TESTCASES.md](docs/TESTCASES.md) (中文) | Acceptance test checklist |
 
@@ -202,7 +202,6 @@ no additional sinks are planned for now.
 
 Core pipeline is complete and covered by integration tests
 (testcontainers: MySQL 8.4, etcd 3.5, Kafka) plus end-to-end HA drills.
-This is a v0.x project: APIs and config schema may still change before v1.0.
 
 ## Contributing
 

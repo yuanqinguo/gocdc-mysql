@@ -238,17 +238,17 @@ follower 侧：
 - TLS（`--cacert/--cert/--key`）与用户名/密码支持，配置项齐全。
 - 读写均封装「重试 3 次 + 指数退避」，避免瞬时错误直接上抛。
 
-## 6. 多源扩展（配置 v2 与键空间 v2）
+## 6. 多源扩展（sources[] 与按源键空间）
 
 单进程多源（`sources[]`，2026-11 落地）对本文的两处增量——完整设计见
 `docs/prd/`（多源 PRD 01~08），此处只记与本文契约的衔接：
 
-- **配置结构 v2**：`source/targets/rules` 一律写在 `sources[]` 数组元素内
+- **配置结构**：`source/targets/rules` 一律写在 `sources[]` 数组元素内
   （2026-11 起为唯一形态——顶层旧形态已移除，命中即报错，不再自动包装）；
   顶层 `pipeline/stock` 为集群级默认模板（源级同名段逐项覆盖，0 值=未设）。
   校验含 V1~V6（源数 1..64 / id 规则 / 逐源现行校验 /
   跨源目标不相交 / 同实例 server_id / 合并值范围）。
-- **键空间 v2**：源私有状态下沉一层
+- **按源键空间**：源私有状态下沉一层
   `/gocdc/{cluster}/sources/{sid}/{position|stock/*|pipeline-pause|events/ddl/*}`；
   cluster 级键（config/leader/election/nodes/events/audit）不动。写门槛锚点
   仍是 `{prefix}/leader`——全部源的 store 实例共享同一 gate 锚，防脑裂论证

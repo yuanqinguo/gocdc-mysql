@@ -439,7 +439,7 @@ curl http://127.0.0.1:9595/metrics                            # Prometheus 指�
 | etcd 挂了会怎样 | TTL 内全节点停管线（安全态，不丢数据）；恢复后自动重选续传 |
 | leader 挂了会怎样 | follower ≤ TTL+10s 接管；窗口期数据零丢失（binlog 重放+幂等 upsert） |
 
-## 11. 多源部署（配置 v2 sources[]，2026-11）
+## 11. 多源部署（sources[]，2026-11）
 
 单进程一个 cluster 承载最多 64 条 MySQL 同步源：每源独立的源连接、规则、
 下游、位点、全量标记、DDL 审批、暂停标志；一个 Web 控制台、一个指标端口、

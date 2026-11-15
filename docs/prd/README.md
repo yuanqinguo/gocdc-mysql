@@ -5,6 +5,9 @@
 `docs/arch/README.md` 的三条阅读路径——本 PRD 建立在现有 11 篇架构文档
 （02~11、13）所描述的单源系统之上，不重复论证已定决策，只做增量设计。
 
+> 注：本目录记录多源改造的设计过程。当前版本已实现本文目标，同步源配置
+> 只有 `sources[]` 一种形态；文中“现状”指改造前的单源形态。
+
 ## 一页速览
 
 **现状**：一个 cluster = 一个源库 = 一条管线 = 一套 etcd 状态。要同步 N 个
@@ -38,8 +41,8 @@ N 份运维面。
 |------|------|------|
 | 01 | [background](01-background.md) | 现状基线（单源硬边界的三层根因）、需求、目标与非目标、等价性定义、术语 |
 | 02 | [overall-design](02-overall-design.md) | 总体方案：源抽象、八个核心决策及被否方案、进程结构、失败隔离模型 |
-| 03 | [config-schema](03-config-schema.md) | 配置模型 v2：`sources[]` 结构、字段与继承、校验规则、v1 兼容映射、完整示例 |
-| 04 | [etcd-ha](04-etcd-ha.md) | etcd 键空间 v2、写门槛复用论证、一次性迁移协议与回滚、HA 行为 |
+| 03 | [config-schema](03-config-schema.md) | 配置模型（`sources[]`）：结构、字段与继承、校验规则、旧形态迁移映射、完整示例 |
+| 04 | [etcd-ha](04-etcd-ha.md) | etcd 键空间（多源）、写门槛复用论证、一次性迁移协议与回滚、HA 行为 |
 | 05 | [runtime](05-runtime.md) | 运行时与生命周期：共享/每源组件矩阵、装配改造、全量与增量编排、背压与资源、优雅停机 |
 | 06 | [api-web](06-api-web.md) | REST API 变更与兼容策略、Web 控制台信息架构（源作用域/URL 设计）、逐页改造、前端实现适配面 |
 | 07 | [observability-ops](07-observability-ops.md) | 指标 label 化清单、告警与 Grafana、日志规范、部署形态、RUNBOOK 增补 |

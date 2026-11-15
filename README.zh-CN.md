@@ -2,7 +2,7 @@
 
 <p align="center">
   <b>单 Go 二进制的 MySQL CDC —— binlog → MySQL / Kafka / RocketMQ，<br>
-  内置高可用、DDL 审批、字段脱敏。</b>
+  内置高可用、多源聚合、DDL 审批与对账、字段脱敏与 Web 控制台。</b>
 </p>
 
 <p align="center">
@@ -124,7 +124,7 @@ docker compose stop gocdc-1                       # 杀掉 leader
 | 管线 | 并行分片 + 水位线 | 单实例单管线 | connector task |
 | 对账校验 | ✅ 内置 API | ✗ | ✗ |
 | Web 控制台 | ✅ 内嵌 | 独立 admin 应用 | 外部 UI |
-| 状态 | 活跃开发中 | 成熟 | 成熟 |
+| 状态 | 稳定 | 成熟 | 成熟 |
 
 需要流式 SQL 变换或超大规模 exactly-once？那是 Flink CDC 的领域——一个完整的
 流计算集群。gocdc 定位在轻量单二进制这一端。
@@ -146,7 +146,7 @@ docker compose stop gocdc-1                       # 杀掉 leader
 ```
               选主 · 位点 · 配置 · DDL 审批门禁
                     ┌──────  etcd  ──────┐
-                    │   （生产 3 节点）   │
+                    │   （etcd 集群）    │
                     └─────────▲──────────┘
                               │
  MySQL ──ROW binlog──► gocdc ─┴───┬──► MySQL       幂等 upsert 直写
@@ -178,7 +178,7 @@ docker compose stop gocdc-1                       # 杀掉 leader
 ## 项目状态
 
 核心管线已完成，覆盖集成测试（testcontainers：MySQL 8.4、etcd 3.5、
-Kafka）与端到端 HA 演练。目前是 v0.x：v1.0 前 API 与配置 schema 仍可能调整。
+Kafka）与端到端 HA 演练。
 
 ## 参与贡献
 

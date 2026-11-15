@@ -6,7 +6,7 @@
 > `-h` 只剩服务模式 flag）。个别无 Web 界面的操作（如手工播种位点）用
 > etcdctl 直接写对应 key。
 >
-> **多源部署（配置 v2 `sources[]`）**：源级操作一律走 `/api/v1/sources/{sid}/...`
+> **多源部署（`sources[]`）**：源级操作一律走 `/api/v1/sources/{sid}/...`
 >（位点回拨/restock/DDL 审批/暂停恢复/verify 全部按源）；旧顶层路由已移除
 >（`/position`、`/pipeline/*` 等一律 404），单源部署同样走 `/sources/default/...`。
 > etcd 直写键全部下沉一层：
@@ -102,7 +102,7 @@ sink 配置变更 + 暂停 → 切换 → 恢复。位点不受影响。
 ## 8. 发布前置检查
 无暂停规则；lag < 阈值；旧实例已停（server_id 冲突互踢）。
 
-## 9. 多源运维（配置 v2 sources[]）
+## 9. 多源运维（sources[]）
 
 ### 9.1 多源配置变更 / 新增源
 1. 改配置：Web 编辑（`PUT /api/v1/sources/{sid}/rules`，按源整组提交，服务端
