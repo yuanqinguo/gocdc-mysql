@@ -20,9 +20,12 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     -ldflags "-s -w -X main.buildVersion=${VERSION} -X main.buildCommit=${COMMIT}" \
     -o /out/gocdc ./cmd/gocdc
 
-FROM docker.cnb.cool/qingflyfei/edu.image.base:gorun-1.0.1
+FROM alpine:3.21
 
-RUN adduser -D -u 10001 gocdc 2>/dev/null || true
+RUN apk add --no-cache ca-certificates tzdata \
+ && adduser -D -u 10001 gocdc
+
+ENV TZ=Asia/Shanghai
 COPY --from=build /out/gocdc /data/wwwRoot/gocdc
 RUN chmod +x /data/wwwRoot/gocdc && chown -R gocdc:gocdc /data/wwwRoot
 

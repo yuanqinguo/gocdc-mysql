@@ -49,7 +49,11 @@ docker compose exec mysql-dst mysql -uroot -p123456 -e "SELECT * FROM demo.order
 - 生产形态：配置写入 etcd 配置键（默认 `/config/edu.mall.gocdc/system`；多集群共享 etcd 时以引导桩 `config_center.key` 或 `-config-key` 显式区分）后只给 `-etcd`（或 `ETCD_HOSTS`）启动。
 - 示例配置里的密码仅用于演示，生产用 `${ENV}` 占位注入（03 §3.2）。
 - gocdc 启动期会比对源/目标全部唯一索引；列序相同但索引名称不同是允许的，缺失或额外唯一键会 fail-fast（防止幂等 upsert 按错误唯一键折叠数据）。
-- 镜像由 CI（tag_push）构建推送；本地 compose 默认现场 build（`build:` 段）。
+- 镜像源全部为公共仓库：etcd 用 `quay.io/coreos/etcd:v3.5.16`，MySQL 用 Docker Hub `mysql:8.0`；
+  gocdc 本地现场 build（`build:` 段）。国内可用 `ETCD_IMAGE` / `MYSQL_IMAGE` / `GOCDC_IMAGE`
+  指向自己的镜像仓库（demo-cluster 的引导容器另有 `ETCD_SEED_IMAGE`；`bitnami/*` 已从
+  Docker Hub 下架，默认改用 `bitnamilegacy/etcd`）。
+- 镜像由 CI（tag_push）构建推送。
 - 镜像 tag 约定：tag `dev-v1.2.3` → `$REGISTRY/$SLUG/dev:v1.2.3`。
 
 ## 多源演示（单进程双源聚合）

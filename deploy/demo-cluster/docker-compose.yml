@@ -12,20 +12,21 @@ name: gocdc-demo-cluster
 
 services:
   etcd:
-    image: ${ETCD_IMAGE:-docker.cnb.cool/qingflyfei/edu.image.base:etcd-3.5.16}
-    command: etcd --name=etcd --data-dir=/etcd-data --advertise-client-urls=http://etcd:2379 --listen-client-urls=http://0.0.0.0:2379
+    image: ${ETCD_IMAGE:-quay.io/coreos/etcd:v3.5.16}
+    command: /usr/local/bin/etcd --name=etcd --data-dir=/etcd-data --advertise-client-urls=http://etcd:2379 --listen-client-urls=http://0.0.0.0:2379
     ports: ["12379:2379"]
     volumes:
       - etcd-data:/etcd-data
     healthcheck:
-      test: ["CMD", "etcdctl", "endpoint", "health", "--endpoints=http://127.0.0.1:2379"]
+      test: ["CMD", "/usr/local/bin/etcdctl", "endpoint", "health", "--endpoints=http://127.0.0.1:2379"]
       interval: 5s
       timeout: 3s
       retries: 20
 
   # 一次性引导：把全量配置写进 etcd 配置中心；gocdc 运行期只从 etcd 读配置。
   config-seed:
-    image: ${ETCD_SEED_IMAGE:-bitnami/etcd:3.5.13}
+    # bitnami/etcd 已从 Docker Hub 下架，改用其历史镜像仓库
+    image: ${ETCD_SEED_IMAGE:-bitnamilegacy/etcd:3.5.13}
     depends_on:
       etcd: { condition: service_healthy }
     volumes:

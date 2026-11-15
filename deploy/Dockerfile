@@ -7,7 +7,7 @@ RUN npm ci --prefix web
 COPY web/ ./web/
 RUN VITE_OUT_DIR=/workspace/internal/api/dist npm run build --prefix web
 
-FROM docker.cnb.cool/qingflyfei/edu.image.base:gobuild-1.24.11 AS build
+FROM golang:1.24.11 AS build
 
 # 版本信息由 CI 注入：--build-arg VERSION=dev-v1.2.3 COMMIT=abc1234
 ARG VERSION=dev
@@ -22,10 +22,13 @@ RUN CGO_ENABLED=0 GOOS=linux \
     go build -ldflags "-s -w -X main.buildVersion=${VERSION} -X main.buildCommit=${COMMIT}" \
     -o /data/wwwRoot/gocdc ./cmd/gocdc
 
-# 运行层：alpine + tzdata + Asia/Shanghai（gorun 基础镜像）
-FROM docker.cnb.cool/qingflyfei/edu.image.base:gorun-1.0.1
+# 运行层：alpine + tzdata + Asia/Shanghai
+FROM alpine:3.21
 
-RUN adduser -D -u 10001 gocdc 2>/dev/null || true
+RUN apk add --no-cache ca-certificates tzdata \
+ && adduser -D -u 10001 gocdc
+
+ENV TZ=Asia/Shanghai
 COPY --from=build /data/wwwRoot/gocdc /data/wwwRoot/gocdc
 RUN chmod +x /data/wwwRoot/gocdc && chown -R gocdc:gocdc /data/wwwRoot
 
