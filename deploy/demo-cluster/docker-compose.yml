@@ -1,0 +1,124 @@
+# 双源多表 + 双节点选主演示
+#
+#   etcd ── mysql-src-a（msa：orders / order_items / products）──┐
+#        ├─ mysql-src-b（msb：users / addresses / user_profiles）┼─► gocdc-1 (leader)
+#        └─ mysql-dst（ms_merged 聚合目标）                        └─► gocdc-2 (hot standby)
+#
+#   启动：docker compose up -d --build
+#   写入：writer 容器每 3 秒往两个源库写变更；目标库随之更新。
+name: gocdc-demo-cluster
+
+services:
+  etcd:
+    image: ${ETCD_IMAGE:-docker.cnb.cool/qingflyfei/edu.image.base:etcd-3.5.16}
+    command: etcd --name=etcd --advertise-client-urls=http://etcd:2379 --listen-client-urls=http://0.0.0.0:2379
+    ports: ["12379:2379"]
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health", "--endpoints=http://127.0.0.1:2379"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  mysql-src-a:
+    image: ${MYSQL_IMAGE:-mysql:8.0}
+    environment: { MYSQL_ROOT_PASSWORD: "123456" }
+    command:
+      - --server-id=101
+      - --log-bin=binlog
+      - --binlog-format=ROW
+      - --binlog-row-image=FULL
+      - --gtid-mode=ON
+      - --enforce-gtid-consistency=ON
+      - --log-replica-updates=ON
+    ports: ["13306:3306"]
+    volumes:
+      - ./init-src-a.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-p123456"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  mysql-src-b:
+    image: ${MYSQL_IMAGE:-mysql:8.0}
+    environment: { MYSQL_ROOT_PASSWORD: "123456" }
+    command:
+      - --server-id=201
+      - --log-bin=binlog
+      - --binlog-format=ROW
+      - --binlog-row-image=FULL
+      - --gtid-mode=ON
+      - --enforce-gtid-consistency=ON
+      - --log-replica-updates=ON
+    ports: ["13406:3306"]
+    volumes:
+      - ./init-src-b.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-p123456"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  mysql-dst:
+    image: ${MYSQL_IMAGE:-mysql:8.0}
+    environment: { MYSQL_ROOT_PASSWORD: "123456" }
+    ports: ["13307:3306"]
+    volumes:
+      - ./init-dst.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-p123456"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  gocdc-1:
+    build:
+      context: ../..
+      dockerfile: deploy/Dockerfile
+    image: ${GOCDC_IMAGE:-gocdc:demo-cluster}
+    command: ["-cluster", "demo-cluster", "-etcd", "etcd:2379", "-config-file", "/data/wwwRoot/config.yml"]
+    environment:
+      GOCDC_WEB_PASSWORD: demo123
+    volumes:
+      - ./config.yml:/data/wwwRoot/config.yml:ro
+    ports: ["8060:8060", "9595:9595"]
+    depends_on:
+      etcd: { condition: service_healthy }
+      mysql-src-a: { condition: service_healthy }
+      mysql-src-b: { condition: service_healthy }
+      mysql-dst: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9595/healthz || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  gocdc-2:
+    image: ${GOCDC_IMAGE:-gocdc:demo-cluster}
+    command: ["-cluster", "demo-cluster", "-etcd", "etcd:2379", "-config-file", "/data/wwwRoot/config.yml"]
+    environment:
+      GOCDC_WEB_PASSWORD: demo123
+    volumes:
+      - ./config.yml:/data/wwwRoot/config.yml:ro
+    ports: ["8061:8060", "9596:9595"]
+    depends_on:
+      etcd: { condition: service_healthy }
+      mysql-src-a: { condition: service_healthy }
+      mysql-src-b: { condition: service_healthy }
+      mysql-dst: { condition: service_healthy }
+      gocdc-1: { condition: service_started }
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9595/healthz || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  writer:
+    image: ${MYSQL_IMAGE:-mysql:8.0}
+    entrypoint: ["/bin/bash", "/writer.sh"]
+    volumes:
+      - ./writer.sh:/writer.sh:ro
+    depends_on:
+      mysql-src-a: { condition: service_healthy }
+      mysql-src-b: { condition: service_healthy }
+    restart: unless-stopped

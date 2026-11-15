@@ -1,0 +1,96 @@
+# 双源多表配置：src-a（msa 三表）+ src-b（msb 三表）聚合写入 ms_merged。
+# 两源目标表名互异（V4 跨源目标不相交校验）。
+config_version: 2
+cluster: demo-cluster
+
+node: {}
+
+ha:
+  enabled: true
+  lease_ttl_seconds: 10
+  leader_check_interval_ms: 2000
+  resign_on_shutdown: true
+
+pipeline:
+  workers: 4
+  worker_queue_size: 8192
+  batch_size: 500
+  flush_interval_ms: 200
+  position_save_interval_ms: 3000
+
+stock:
+  lock_mode: auto
+  chunk_rows: 5000
+  throttle_ms: 0
+  workers: 4
+
+sources:
+  - id: src-a
+    source:
+      addr: mysql-src-a:3306
+      user: root
+      password: "123456"
+      charset: utf8mb4
+      flavor: mysql
+      timezone: UTC
+      exclude_schemas: [mysql, sys, information_schema, performance_schema]
+      use_gtid: true
+    targets:
+      mysql:
+        enabled: true
+        addr: mysql-dst:3306
+        user: root
+        password: "123456"
+        charset: utf8mb4
+        max_open_conns: 10
+        tx_chunk_rows: 500
+        target_database: ms_merged
+        ddl_sync: true
+    rules:
+      - schema: msa
+        sinks: { mysql: true }
+        ddl_policy: pause
+        tables:
+          - { table: orders, order_by_column: id, do_stock: true }
+          - { table: order_items, order_by_column: id, do_stock: true }
+          - { table: products, order_by_column: id, do_stock: true }
+
+  - id: src-b
+    source:
+      addr: mysql-src-b:3306
+      user: root
+      password: "123456"
+      charset: utf8mb4
+      flavor: mysql
+      timezone: UTC
+      exclude_schemas: [mysql, sys, information_schema, performance_schema]
+      use_gtid: true
+    targets:
+      mysql:
+        enabled: true
+        addr: mysql-dst:3306
+        user: root
+        password: "123456"
+        charset: utf8mb4
+        max_open_conns: 10
+        tx_chunk_rows: 500
+        target_database: ms_merged
+        ddl_sync: true
+    rules:
+      - schema: msb
+        sinks: { mysql: true }
+        ddl_policy: pause
+        tables:
+          - { table: users, order_by_column: id, do_stock: true }
+          - { table: addresses, order_by_column: id, do_stock: true }
+          - { table: user_profiles, order_by_column: id, do_stock: true }
+
+observability:
+  metrics_addr: ":9595"
+  web:
+    enabled: true
+    addr: ":8060"
+    username: admin
+    password: ${GOCDC_WEB_PASSWORD}
+  log:
+    level: info
