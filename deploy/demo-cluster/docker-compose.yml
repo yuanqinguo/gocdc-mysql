@@ -1,23 +1,39 @@
 # 双源多表 + 双节点选主演示
 #
-#   etcd ── mysql-src-a（msa：orders / order_items / products）──┐
-#        ├─ mysql-src-b（msb：users / addresses / user_profiles）┼─► gocdc-1 (leader)
-#        └─ mysql-dst（ms_merged 聚合目标）                        └─► gocdc-2 (hot standby)
+#   etcd（配置中心 + 选主/位点，单节点，key=/gocdc/demo-cluster/config）
+#     ├─ mysql-src-a（msa：orders / order_items / products）──┐
+#     ├─ mysql-src-b（msb：users / addresses / user_profiles）┼─► gocdc-1 (leader)
+#     └─ mysql-dst（ms_merged 聚合目标）                       └─► gocdc-2 (hot standby)
 #
 #   启动：docker compose up -d --build
+#   gocdc 不带 -config-file：配置由 config-seed 写入 etcd，运行期只从 etcd 读。
 #   写入：writer 容器每 3 秒往两个源库写变更；目标库随之更新。
 name: gocdc-demo-cluster
 
 services:
   etcd:
     image: ${ETCD_IMAGE:-docker.cnb.cool/qingflyfei/edu.image.base:etcd-3.5.16}
-    command: etcd --name=etcd --advertise-client-urls=http://etcd:2379 --listen-client-urls=http://0.0.0.0:2379
+    command: etcd --name=etcd --data-dir=/etcd-data --advertise-client-urls=http://etcd:2379 --listen-client-urls=http://0.0.0.0:2379
     ports: ["12379:2379"]
+    volumes:
+      - etcd-data:/etcd-data
     healthcheck:
       test: ["CMD", "etcdctl", "endpoint", "health", "--endpoints=http://127.0.0.1:2379"]
       interval: 5s
       timeout: 3s
       retries: 20
+
+  # 一次性引导：把全量配置写进 etcd 配置中心；gocdc 运行期只从 etcd 读配置。
+  config-seed:
+    image: ${ETCD_SEED_IMAGE:-bitnami/etcd:3.5.13}
+    depends_on:
+      etcd: { condition: service_healthy }
+    volumes:
+      - ./config.yml:/config.yml:ro
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - etcdctl --endpoints=http://etcd:2379 put /gocdc/demo-cluster/config < /config.yml
+    restart: "no"
 
   mysql-src-a:
     image: ${MYSQL_IMAGE:-mysql:8.0}
@@ -76,14 +92,13 @@ services:
       context: ../..
       dockerfile: deploy/Dockerfile
     image: ${GOCDC_IMAGE:-gocdc:demo-cluster}
-    command: ["-cluster", "demo-cluster", "-etcd", "etcd:2379", "-config-file", "/data/wwwRoot/config.yml"]
+    command: ["-cluster", "demo-cluster", "-etcd", "etcd:2379", "-config-key", "/gocdc/demo-cluster/config"]
     environment:
       GOCDC_WEB_PASSWORD: demo123
-    volumes:
-      - ./config.yml:/data/wwwRoot/config.yml:ro
     ports: ["8060:8060", "9595:9595"]
     depends_on:
       etcd: { condition: service_healthy }
+      config-seed: { condition: service_completed_successfully }
       mysql-src-a: { condition: service_healthy }
       mysql-src-b: { condition: service_healthy }
       mysql-dst: { condition: service_healthy }
@@ -95,14 +110,13 @@ services:
 
   gocdc-2:
     image: ${GOCDC_IMAGE:-gocdc:demo-cluster}
-    command: ["-cluster", "demo-cluster", "-etcd", "etcd:2379", "-config-file", "/data/wwwRoot/config.yml"]
+    command: ["-cluster", "demo-cluster", "-etcd", "etcd:2379", "-config-key", "/gocdc/demo-cluster/config"]
     environment:
       GOCDC_WEB_PASSWORD: demo123
-    volumes:
-      - ./config.yml:/data/wwwRoot/config.yml:ro
     ports: ["8061:8060", "9596:9595"]
     depends_on:
       etcd: { condition: service_healthy }
+      config-seed: { condition: service_completed_successfully }
       mysql-src-a: { condition: service_healthy }
       mysql-src-b: { condition: service_healthy }
       mysql-dst: { condition: service_healthy }
@@ -122,3 +136,6 @@ services:
       mysql-src-a: { condition: service_healthy }
       mysql-src-b: { condition: service_healthy }
     restart: unless-stopped
+
+volumes:
+  etcd-data:
