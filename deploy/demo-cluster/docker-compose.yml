@@ -32,7 +32,14 @@ services:
       - ./config.yml:/config.yml:ro
     entrypoint: ["/bin/bash", "-c"]
     command:
-      - etcdctl --endpoints=http://etcd:2379 put /gocdc/demo-cluster/config < /config.yml
+      - |
+        set -e
+        if etcdctl --endpoints=http://etcd:2379 get /gocdc/demo-cluster/config --print-value-only | grep -q .; then
+          echo "config already in etcd (/gocdc/demo-cluster/config), skip seeding"
+        else
+          etcdctl --endpoints=http://etcd:2379 put /gocdc/demo-cluster/config < /config.yml
+          echo "config seeded to etcd (/gocdc/demo-cluster/config)"
+        fi
     restart: "no"
 
   mysql-src-a:
