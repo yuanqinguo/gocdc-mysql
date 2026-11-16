@@ -35,7 +35,9 @@ func NewScanner(sm *schema.Manager, tr *transform.Transformer, sn sink.Sink, chu
 type Progress func(mk *Marker) error
 
 // maxChunkRedials 单表扫描内连接重换上限（公网链路流龄强杀可能反复发生，
-// 大表长扫需多次重连；10 次封顶防死循环烧连接）。
+// 大表长扫需多次重连；10 次封顶防死循环烧连接）。成功取块即复位——上限
+// 语义是「连续失败」，不是整表累计（2026-11-16 review P2-3：长表偶发断连
+// 累计到 10 次会把可恢复的瞬态故障误判成整表失败）。
 const maxChunkRedials = 10
 
 // ScanTable 扫描一张表（slot = 会话槽位号，sql.Conn 不允许跨 goroutine 并发，
@@ -73,7 +75,11 @@ func (s *Scanner) ScanTable(ctx context.Context, sess *Session, slot int, db, ta
 	)
 	if len(lastPK) > 0 {
 		if cursor, err = decodePK(pkMeta, lastPK); err != nil {
-			return 0, err
+			// 断点游标与现行主键结构不匹配（如主键列变更后的旧标记）：
+			// 退化为整表重扫（幂等 upsert 吸收重复），绝不因脏断点失败
+			logging.L().Warn("stock 断点游标不可解码，整表重扫",
+				zap.String("db", db), zap.String("table", table), zap.Error(err))
+			cursor = nil
 		}
 	}
 
@@ -87,7 +93,12 @@ func (s *Scanner) ScanTable(ctx context.Context, sess *Session, slot int, db, ta
 			if redials < maxChunkRedials && sink.IsConnLost(err) {
 				redials++
 				s.logRedial(db, table, redials, err)
-				time.Sleep(time.Duration(redials) * 100 * time.Millisecond) // 轻退避
+				// ctx 感知退避：取消后立即返回，不睡满（2026-11-16 review P2-3）
+				select {
+				case <-ctx.Done():
+					return rowsDone, ctx.Err()
+				case <-time.After(time.Duration(redials) * 100 * time.Millisecond): // 轻退避
+				}
 				if rerr := sess.RedialSlot(ctx, slot); rerr != nil {
 					return rowsDone, fmt.Errorf("stock: %s.%s 第 %d 块重连失败: %w", db, table, chunkSeq, rerr)
 				}
@@ -95,6 +106,7 @@ func (s *Scanner) ScanTable(ctx context.Context, sess *Session, slot int, db, ta
 			}
 			return rowsDone, err
 		}
+		redials = 0 // 成功即复位（连续失败语义）：长扫描期偶发断连不累计误杀整表
 		if len(rows) == 0 {
 			return rowsDone, nil // 空表/扫完
 		}

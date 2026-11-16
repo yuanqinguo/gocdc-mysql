@@ -83,9 +83,16 @@ func (s *Service) Run(ctx context.Context) (*Result, error) {
 			continue
 		}
 		lastPK := []string(nil)
-		if mk != nil && mk.Status == StatusRunning {
-			// 06 §4.1-1：session_id 匹配才可续扫——跨进程/跨主恢复必走重扫
-			lastPK = nil
+		if mk != nil && mk.Status != StatusDone && len(mk.LastPK) > 0 {
+			// 断点续扫（2026-11-16 review P2-4，原实现无条件丢弃 lastPK 整表重扫）：
+			// LastPK 是「已成功投递块」的干净边界（游标推进先于 onProgress 持久化），
+			// running/failed 皆可续。跨会话续扫的丢失安全由两点保证：
+			//  ① 新会话以当前视图扫余下区间（游标 WHERE pk > LastPK 期间新插入的
+			//     更小主键行不在快照中，但其 INSERT 位点 > 各会话 P，必被增量重放）；
+			//  ② 增量起点 globalP = 各会话 P 的最小值 ≤ 每个已扫行所在快照视图——
+			//     早扫行在 (V1, now] 的变更必被重放，重复由幂等 upsert 吸收。
+			// 游标与新主键结构不匹配时 ScanTable 内部降级整表重扫。
+			lastPK = mk.LastPK
 		}
 		todo = append(todo, struct {
 			db, table string
@@ -121,9 +128,14 @@ func (s *Service) Run(ctx context.Context) (*Result, error) {
 		zap.String("session", sess.ID), zap.Int("tables", len(todo)),
 		zap.Int("snapshot_conns", workers))
 
-	// P 先行：全局 stock_position = max(已记录, P)（06 §4.1a-d）
+	// P 先行：全局 stock_position = min(已记录, P)（2026-11-16 review P2-4 修正，
+	// 原实现取 max）。增量起点必须 ≤ 每个扫描会话的快照视图：跨会话恢复（进程
+	// 中断重扫/续扫）时取 max 会把起点推到早会话视图之后——早扫行在 (V1, P2]
+	// 窗口内的变更既不在其快照中、又不会被增量重放 = 静默丢数据。取 min 则重放
+	// 窗口只会偏大，重复由下游幂等 upsert 吸收（宁可重复、不可丢失）。每会话
+	// P 先行持久化保证进程中途死亡也不丢失早会话的 P。
 	globalP, ok, _ := s.markers.GlobalPosition(ctx)
-	if !ok || laterPos(sess.Pos, globalP) {
+	if !ok || laterPos(globalP, sess.Pos) {
 		globalP = sess.Pos
 	}
 	globalP.Seq = 0
@@ -197,7 +209,9 @@ func (s *Service) scanOne(ctx context.Context, slot int, sess *Session, sc *Scan
 	}
 
 	var lastReported int64
+	var lastMK *Marker // 最近一次进度标记（failed 写入时保留断点用）
 	n, err := sc.ScanTable(ctx, sess, slot, db, table, rule, lastPK, func(mk *Marker) error {
+		lastMK = mk
 		if s.throttleMS > 0 {
 			select {
 			case <-ctx.Done():
@@ -218,11 +232,17 @@ func (s *Service) scanOne(ctx context.Context, slot int, sess *Session, sc *Scan
 		if errors.Is(err, context.Canceled) {
 			return err
 		}
-		// 不可重试失败：标记 failed + 告警（绝不静默丢块，06 §4）
-		_ = s.markers.Put(ctx, db, table, &Marker{
+		// 不可重试失败：标记 failed + 告警（绝不静默丢块，06 §4）。断点
+		//（LastPK/进度）随标记保留——重启后从断点续扫而非整表重扫
+		//（2026-11-16 review P2-4；原实现把进度抹掉导致白扫）。
+		failed := &Marker{
 			Status: StatusFailed, SessionID: sess.ID, SnapshotP: sess.Pos,
 			Error: truncate(err.Error(), 500),
-		})
+		}
+		if lastMK != nil {
+			failed.LastPK, failed.ChunkSeq, failed.RowsDone = lastMK.LastPK, lastMK.ChunkSeq, lastMK.RowsDone
+		}
+		_ = s.markers.Put(ctx, db, table, failed)
 		s.log.Error("全量表失败", zap.String("db", db), zap.String("table", table), zap.Error(err))
 		return err
 	}

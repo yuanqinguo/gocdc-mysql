@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"gocdc/internal/model"
 )
@@ -85,8 +86,14 @@ func (s *Session) Close() error {
 
 // OpenSnapshot 打开快照会话（06 §2 步骤 1~5；锁只持几毫秒）：
 //
-//	锁（按矩阵）→ 快照连接集各自 START TRANSACTION WITH CONSISTENT SNAPSHOT →
-//	SHOW MASTER STATUS → P → 解锁。返回后各表扫描走分配到的连接（P 时刻视图）。
+//	锁（按矩阵）→ 读位点 P → 快照连接集各自 START TRANSACTION WITH CONSISTENT
+//	SNAPSHOT → 解锁。返回后各表扫描走分配到的连接（P 时刻视图）。
+//
+// P 必须先于快照开启读取（2026-11-16 review P2-2，mysqldump 同款顺序）：
+// 增量起点取 P，则 (P, 快照视图] 窗口内的事件会被增量重放——重复投递由
+// 下游幂等 upsert 吸收（宁可重复、不可丢失）。若 P 在快照开启之后读取，
+// backup/none 锁模式（不挡 DML）下 (视图, P] 窗口的事件既不在快照中、又被
+// 起点跳过 = 静默丢数据；ftwrl 因锁窗口内无提交不受顺序影响。
 func OpenSnapshot(ctx context.Context, db *sql.DB, lockMode string, workers int) (*Session, string, error) {
 	if workers < 1 {
 		workers = 1
@@ -114,7 +121,17 @@ func OpenSnapshot(ctx context.Context, db *sql.DB, lockMode string, workers int)
 		return nil, usedMode, cause
 	}
 
-	// 一致性快照（同一连接：FTWRL 后开启 = 锁点视图）
+	// 位点 P（conn0，锁内、快照开启前读取——见函数注释的丢失安全论证）
+	var file string
+	var pos uint32
+	var i1, i2, g any
+	if err := conn.QueryRowContext(ctx, "SHOW BINARY LOG STATUS").Scan(&file, &pos, &i1, &i2, &g); err != nil {
+		if err2 := conn.QueryRowContext(ctx, "SHOW MASTER STATUS").Scan(&file, &pos, &i1, &i2, &g); err2 != nil {
+			return abort(fmt.Errorf("stock: 读取 master 位点: %v / %v", err, err2))
+		}
+	}
+
+	// 一致性快照（同一连接：锁内开启 = 锁点视图）
 	if _, err := conn.ExecContext(ctx, "START TRANSACTION WITH CONSISTENT SNAPSHOT"); err != nil {
 		return abort(fmt.Errorf("stock: 开启一致性快照: %w", err))
 	}
@@ -136,20 +153,12 @@ func OpenSnapshot(ctx context.Context, db *sql.DB, lockMode string, workers int)
 		}
 	}
 
-	// 位点 P（conn0，锁内读取）
-	var file string
-	var pos uint32
-	var i1, i2, g any
-	if err := conn.QueryRowContext(ctx, "SHOW BINARY LOG STATUS").Scan(&file, &pos, &i1, &i2, &g); err != nil {
-		if err2 := conn.QueryRowContext(ctx, "SHOW MASTER STATUS").Scan(&file, &pos, &i1, &i2, &g); err2 != nil {
-			return abort(fmt.Errorf("stock: 读取 master 位点: %v / %v", err, err2))
-		}
-	}
-
-	// 立即解锁（不阻塞业务！06 §2-5）
-	if _, err := conn.ExecContext(ctx, releaseLockSQL(usedMode)); err != nil {
-		// 解锁失败不影响快照正确性（连接关闭也会释放），记入模式说明
-		usedMode += " (unlock_failed)"
+	// 立即解锁（不阻塞业务！06 §2-5）。解锁失败有界重试，仍失败则中止整个
+	// 快照会话（2026-11-16 review P2-1）：UNLOCK 与锁同会话绑定，带着 FTWRL
+	// 进入长扫描会把源库全部写入阻塞整个全量期（事故级）。abort 关闭连接，
+	// 服务端随会话断开释放锁——中止路径本身即安全的兜底放锁。
+	if uerr := unlockWithRetry(conn, releaseLockSQL(usedMode)); uerr != nil {
+		return abort(fmt.Errorf("stock: 快照锁解锁失败（会话中止，绝不带锁扫描；连接关闭将由服务端放锁）: %w", uerr))
 	}
 
 	return &Session{
@@ -158,6 +167,27 @@ func OpenSnapshot(ctx context.Context, db *sql.DB, lockMode string, workers int)
 		db:    db,
 		conns: conns,
 	}, usedMode, nil
+}
+
+// unlockMaxTries 解锁尝试次数（UNLOCK TABLES/UNLOCK INSTANCE 与持锁同会话，
+// 必须在同一根连接上执行；瞬态错误短退避后重试）。
+const unlockMaxTries = 3
+
+// unlockWithRetry 在持锁连接上有界重试解锁。ctx 可能已取消（取消也是解锁
+// 失败的常见原因），故用独立短超时 ctx 兜底最后一次尝试。
+func unlockWithRetry(conn *sql.Conn, sql string) error {
+	var lastErr error
+	for i := 0; i < unlockMaxTries; i++ {
+		uctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		_, err := conn.ExecContext(uctx, sql)
+		cancel()
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		time.Sleep(200 * time.Millisecond)
+	}
+	return lastErr
 }
 
 // acquireLock 按模式加锁；auto 依 FTWRL → backup 探测降级，均失败即报错
