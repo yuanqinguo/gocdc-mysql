@@ -137,7 +137,7 @@ RU=$($DST -N -e "SELECT COUNT(*) FROM ms_merged.users" 2>/dev/null)
 grp "MS-09 MQ 双源：topic 不相交 + envelope source 字段 + src-a 保序"
 # 全新消费组从最新位点开始——先起消费者再写入
 TS9=$(date +%s)
-setsid nohup $RMQCONS -topic CDC_msa_msa_orders -group ms09-$TS9 -out /tmp/rmq-msa.jsonl -idle 8s > /tmp/rmqcons-ms09.log 2>&1 &
+setsid nohup $RMQCONS -topic CDC_msa_msa_orders -group ms09-$TS9 -out /tmp/rmq-msa.jsonl -idle 8s > /tmp/rmqcons-ms09.log 2>&1 9>&- &
 sleep 2
 $SRC -e "INSERT INTO msa.orders (val,amt) VALUES ('ms09-1',1),('ms09-2',2),('ms09-3',3)" 2>/dev/null
 sleep 10

@@ -62,7 +62,7 @@ done
 
 grp "③e RMQ 带点库名双写（topic 点换下划线）"
 TS=$(date +%s)
-setsid nohup $RMQCONS -topic CDC_edu_mall_admin_users -group hiprio-$TS -out /tmp/rmq-hiprio.jsonl -idle 12s > /tmp/rmqcons-hiprio.log 2>&1 &
+setsid nohup $RMQCONS -topic CDC_edu_mall_admin_users -group hiprio-$TS -out /tmp/rmq-hiprio.jsonl -idle 12s > /tmp/rmqcons-hiprio.log 2>&1 9>&- &
 sleep 4
 $SRC -e "INSERT INTO \`edu.mall.admin\`.users (name,phone,email) VALUES ('dotdb-rmq','13900000004','rmq@x.c')" 2>/dev/null
 RMQN=0

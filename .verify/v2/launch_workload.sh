@@ -11,7 +11,7 @@ done
 sleep 1
 
 setsid nohup bash "$BASE/demo_workload.sh" "$DURATION" "$INTERVAL" \
-  >/dev/null 2>&1 </dev/null &
+  >/dev/null 2>&1 9>&- </dev/null &
 echo "workload launched: duration=${DURATION}s interval=${INTERVAL}s"
 sleep 2
 pgrep -af 'bash .*demo_workload\.sh' 2>/dev/null | sed 's/^/  running /'

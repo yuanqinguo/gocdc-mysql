@@ -40,7 +40,7 @@ echo "  restock 前标记: $($ETCDC get /gocdc/verify/sources/default/stock/rmqt
 # 从 EARLIEST 重放全部积压（含重扫快照事件），天然免疫时序。
 curl -sS --noproxy '*' --max-time 25 -u admin:demo123 -X POST -o /tmp/v2/rs.json -w '%{http_code}' "$API/sources/default/rules/by-schema/rmqtest/msg/restock?confirm=true" > /tmp/v2/rs.code 2>/tmp/v2/rs.err
 echo "  restock: code=$(cat /tmp/v2/rs.code 2>/dev/null) err=[$(cat /tmp/v2/rs.err 2>/dev/null)] body=[$(cat /tmp/v2/rs.json 2>/dev/null)] pid=$(pickpid node1)"
-setsid nohup $RMQCONS -topic CDC_rmqtest_msg -group g5-$TS -out /tmp/rmq-g5.jsonl -idle 15s > /tmp/rmqcons-g5.log 2>&1 &
+setsid nohup $RMQCONS -topic CDC_rmqtest_msg -group g5-$TS -out /tmp/rmq-g5.jsonl -idle 15s > /tmp/rmqcons-g5.log 2>&1 9>&- &
 STOCKN=0
 for i in $(seq 1 30); do
   STOCKN=$(grep -ac '"phase":"snapshot"' /tmp/rmq-g5.jsonl 2>/dev/null)
@@ -70,7 +70,7 @@ echo "$I1V" | head -1 | grep -q "^OK:" && ok "I1 自描述信封字段齐全（$
 
 grp "I2 增量 workload 三方对账（源=目标=消费态）"
 TS2=$(date +%s)
-setsid nohup $RMQCONS -topic CDC_rmqtest_msg -group i2-$TS2 -out /tmp/rmq-i2.jsonl -idle 12s > /tmp/rmqcons-i2.log 2>&1 &
+setsid nohup $RMQCONS -topic CDC_rmqtest_msg -group i2-$TS2 -out /tmp/rmq-i2.jsonl -idle 12s > /tmp/rmqcons-i2.log 2>&1 9>&- &
 sleep 4
 docker exec -i vf-src mysql -uroot -p123456 -h127.0.0.1 --default-character-set=utf8mb4 < "$V1/rmq_incr.sql" 2>/dev/null
 for i in $(seq 1 30); do LB=$(lagof 9595); [ "$LB" = "0" ] && break; sleep 2; done
@@ -81,7 +81,7 @@ echo "$CMP" | grep -qiE "PASS|一致|0 mismatch|三方一致" && ok "I2 三方�
 
 grp "I6 同行 10 次 UPDATE 顺序性（FIFO message group 保序）"
 TS3=$(date +%s)
-setsid nohup $RMQCONS -topic CDC_rmqtest_msg -group i6-$TS3 -out /tmp/rmq-i6.jsonl -idle 10s > /tmp/rmqcons-i6.log 2>&1 &
+setsid nohup $RMQCONS -topic CDC_rmqtest_msg -group i6-$TS3 -out /tmp/rmq-i6.jsonl -idle 10s > /tmp/rmqcons-i6.log 2>&1 9>&- &
 sleep 4
 $SRC -e "INSERT INTO rmqtest.msg (name,qty,amount,note) VALUES ('i6-row',0,0,'init')" 2>/dev/null
 IDQ=$($SRC -N -e "SELECT id FROM rmqtest.msg WHERE name='i6-row'" 2>/dev/null)
@@ -129,7 +129,7 @@ TS4=$(date +%s)
 # 已就绪但 v5 gRPC 客户端仍 TOPIC_NOT_FOUND——两条查询路径不同，2026-10-30 实证）
 for att in 1 2 3 4 5 6 7 8; do
   rm -f /tmp/rmq-i3.jsonl
-  setsid nohup $RMQCONS -topic CDC_rmqtest_msg -group i3-$TS4-$att -out /tmp/rmq-i3.jsonl -idle 25s > /tmp/rmqcons-i3.log 2>&1 &
+  setsid nohup $RMQCONS -topic CDC_rmqtest_msg -group i3-$TS4-$att -out /tmp/rmq-i3.jsonl -idle 25s > /tmp/rmqcons-i3.log 2>&1 9>&- &
   sleep 10
   grep -q TOPIC_NOT_FOUND /tmp/rmqcons-i3.log 2>/dev/null || break
   echo "  消费者第 $att 次撞 proxy 路由缓存未刷新，等 15s 重试…"
@@ -143,7 +143,7 @@ echo "  补投: 消费收到宕机期消息=$N3/5 进程存活=$ALIVE（无需�
 
 grp "I4 崩溃重放幂等（kill -9 → 重放 → event_id 收敛）"
 TS5=$(date +%s)
-setsid nohup $RMQCONS -topic CDC_rmqtest_msg -group i4-$TS5 -out /tmp/rmq-i4.jsonl -idle 15s > /tmp/rmqcons-i4.log 2>&1 &
+setsid nohup $RMQCONS -topic CDC_rmqtest_msg -group i4-$TS5 -out /tmp/rmq-i4.jsonl -idle 15s > /tmp/rmqcons-i4.log 2>&1 9>&- &
 sleep 4
 $SRC -e "INSERT INTO rmqtest.msg (name,qty,amount,note) SELECT CONCAT('i4-',n), n, n, 'crash' FROM (WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM s WHERE n<60) SELECT n FROM s) t" 2>/dev/null
 sleep 3
@@ -182,7 +182,7 @@ stub_start node1 verify :9595 :8060
 wait_ready 9595 60 && ok "I7a 纯 MQ boot（mysql 未启用不拒启）" || { bad "I7a boot"; tail -20 /tmp/v2/node1.log; }
 wait_src_state 8060 default running 40 && ok "I7b 管线 running（位点沿用 v2 键）" || bad "I7b state=$(src_state 8060 default)"
 TS7=$(date +%s)
-setsid nohup $RMQCONS -topic CDC_rmqtest_msg -group i7-$TS7 -out /tmp/rmq-i7.jsonl -idle 12s > /tmp/rmqcons-i7.log 2>&1 &
+setsid nohup $RMQCONS -topic CDC_rmqtest_msg -group i7-$TS7 -out /tmp/rmq-i7.jsonl -idle 12s > /tmp/rmqcons-i7.log 2>&1 9>&- &
 sleep 4
 $SRC -e "INSERT INTO rmqtest.msg (name,qty,amount,note) VALUES ('i7-a',7,7,'mqonly')" 2>/dev/null
 for i in $(seq 1 20); do LB=$(lagof 9595); [ "$LB" = "0" ] && break; sleep 2; done

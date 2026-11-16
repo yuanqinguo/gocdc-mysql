@@ -59,7 +59,7 @@ grp "I5 集群单产出（leader 切换前后各一批每行恰一条）"
 # 当前 broker 下不成立），因此本 run 的行名带唯一时间戳前缀，计数只认本 run。
 TS=$(date +%s)
 TAGA="i5a-$TS"; TAGB="i5b-$TS"
-setsid nohup $RMQCONS -topic CDC_rmqtest_msg -group i5-$TS -out /tmp/rmq-i5.jsonl -idle 12s > /tmp/rmqcons-i5.log 2>&1 &
+setsid nohup $RMQCONS -topic CDC_rmqtest_msg -group i5-$TS -out /tmp/rmq-i5.jsonl -idle 12s > /tmp/rmqcons-i5.log 2>&1 9>&- &
 RMQPID=$!
 sleep 4
 $SRC -e "INSERT INTO rmqtest.msg (name,qty,amount,note) SELECT CONCAT('$TAGA-',n), n, n, 'i5a' FROM (WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM s WHERE n<10) SELECT n FROM s) t" || bad "I5 前置: i5a 插入失败"
