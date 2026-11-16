@@ -24,7 +24,6 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"gocdc/internal/config"
 	"os"
 	"os/signal"
 	"runtime"
@@ -60,7 +59,13 @@ type options struct {
 func parseFlags(args []string) (*options, error) {
 	opts := &options{}
 	fs := flag.NewFlagSet("gocdc", flag.ContinueOnError)
-	fs.StringVar(&opts.cluster, "cluster", config.ServerFullName, "集群名覆盖（缺省取引导文件 cluster，再缺省 gocdc-mysql；决定协调面前缀 /gocdc/{cluster}）")
+	fs.StringVar(&opts.cluster, "cluster", "", "集群名覆盖（缺省取引导文件 cluster，再缺省 gocdc-mysql；决定协调面前缀 /gocdc/{cluster}）")
+	// 默认值必须为空串（2026-11-16 集成测试 A7 实证回归， revert 333deb1）：
+	// flag 包无法区分「显式传参」与「默认值」，非空默认会让 bootstrap.go 的
+	// 仲裁链（flag > 引导文件 > gocdc-mysql）恒被默认值短路——零参数引导桩
+	// 的 cluster 恒为 edu.mall.gocdc，集群不一致直接拒启；env 模式下协调面
+	// 前缀也悄然偏离文档约定的 /gocdc/gocdc-mysql。缺省语义由 ResolveStartup
+	// 仲裁链承担（含 ETCD_HOSTS 形态的 DefaultClusterName 回退），此处不填。
 	fs.StringVar(&opts.etcdAddrs, "etcd", "", "协调面 etcd 覆盖，逗号分隔（缺省取环境变量 ETCD_HOSTS，再缺省取引导文件；无引导文件时兼作配置中心）")
 	fs.StringVar(&opts.configKey, "config-key", "", "配置 key 路径覆盖（缺省取引导桩 config_center.key，再缺省 /config/edu.mall.gocdc/system）")
 	fs.StringVar(&opts.configFile, "config-file", "", "引导/配置文件路径覆盖（默认工作目录 config.local.yml）")
