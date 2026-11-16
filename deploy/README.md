@@ -1,5 +1,13 @@
 # gocdc 部署 / 演示
 
+> **⚠️ 安全告示（生产必读）**
+> - 本目录及 `examples/` 内全部配置均为**演示用途**：口令是 `123456`/`demo123` 等
+>   公开弱口令，且与演示容器环境（MySQL root 密码）配套硬编码。**禁止原样用于
+>   生产**——生产一律用 `${ENV}` 占位注入敏感字段（加载链支持且缺变量 fail-fast，
+>   见 03 §3.2）。
+> - Web 控制台具备位点改写、DDL 审批、整集群重启等高危权限，凭据经 HTTP Basic
+>   传输：生产必须置于 TLS 反向代理（HTTPS）之后，不要裸 HTTP 暴露端口。
+
 ## 拓扑
 
 | 服务 | 用途 | 端口（宿主机） |
@@ -47,7 +55,7 @@ docker compose exec mysql-dst mysql -uroot -p123456 -e "SELECT * FROM demo.order
 - 零参数启动：工作目录放 `config.local.yml` 即可（引导文件 file/etcd 两形态、
   配置中心与协调面可分实例，见 internal/config/README.md §2.3）；compose 演示用显式 flag 形态。
 - 生产形态：配置写入 etcd 配置键（默认 `/config/edu.mall.gocdc/system`；多集群共享 etcd 时以引导桩 `config_center.key` 或 `-config-key` 显式区分）后只给 `-etcd`（或 `ETCD_HOSTS`）启动。
-- 示例配置里的密码仅用于演示，生产用 `${ENV}` 占位注入（03 §3.2）。
+- 示例配置里的密码仅用于演示（须与演示容器环境一致，验收脚本直接消费），生产用 `${ENV}` 占位注入（03 §3.2）；Web 生产须 TLS 反代（见顶部安全告示）。
 - gocdc 启动期会比对源/目标全部唯一索引；列序相同但索引名称不同是允许的，缺失或额外唯一键会 fail-fast（防止幂等 upsert 按错误唯一键折叠数据）。
 - 镜像源全部为公共仓库：etcd 用 `quay.io/coreos/etcd:v3.5.16`，MySQL 用 Docker Hub `mysql:8.0`；
   gocdc 本地现场 build（`build:` 段）。国内可用 `ETCD_IMAGE` / `MYSQL_IMAGE` / `GOCDC_IMAGE`
