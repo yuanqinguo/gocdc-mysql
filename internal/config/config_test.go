@@ -293,7 +293,9 @@ func TestValidate_TableDriven(t *testing.T) {
 		}, []string{"schema 重复"}},
 		{"组内表重复", func(c *Config) {
 			c.Sources[0].Rules[0].Tables = append(c.Sources[0].Rules[0].Tables, TableRule{Table: "T1", DoStock: boolPtr(false)})
-		}, []string{"重复"}},
+		}, []string{"表级规则重复", "源内目标表冲突"}},
+		// 2026-11-16 review P0-1：3826239 引入源内目标冲突校验后，组内重复表
+		// 会同时命中两条校验（表级重复 + 同一目标互覆），期望清单须含两条。
 		{"do_stock缺失", func(c *Config) { c.Sources[0].Rules[0].Tables[0].DoStock = nil }, []string{"do_stock 必填"}},
 		{"表通配符", func(c *Config) { c.Sources[0].Rules[0].Tables[0].Table = "*" }, []string{"具体表名"}},
 		// ── observability ──

@@ -432,7 +432,9 @@ func checkCrossSourceTargets(c *Config, errf func(string, ...any)) {
 			// 目标表=事件互覆（V3 只拦同组内重复表，跨组+跨库拦不到）——与跨源
 			// 冲突同级的数据互覆，一并拦死
 			if prev.sid == sid {
-				errf("源内目标表冲突（%s）：sources/%s 内两组规则解析到同一目标 %q（同名表互覆，D6 拦死）",
+				// 措辞覆盖两种形态：同组内重复表条目、跨组（跨库）同名表（2026-11-16
+				// review P0-1：原文案「两组规则」对组内重复不准确）。
+				errf("源内目标表冲突（%s）：sources/%s 内多个表条目解析到同一目标 %q（同名表互覆，D6 拦死）",
 					kind, sid, target)
 				return
 			}
