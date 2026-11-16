@@ -279,6 +279,29 @@ func TestDiffDefs_CreateTable(t *testing.T) {
 	}
 }
 
+// TestColDefSQL_DefaultForms 列默认值生成（2026-11-16 review 二轮）：
+// datetime/timestamp 字面量默认值必须加引号（information_schema 返回裸字面量，
+// 原样拼接生成非法 SQL）；CURRENT_TIMESTAMP 函数形态保持不加引号。
+func TestColDefSQL_DefaultForms(t *testing.T) {
+	cases := []struct {
+		name string
+		c    ColDef
+		want string
+	}{
+		{"datetime 字面量默认", ColDef{Name: "created", ColumnType: "datetime", RawType: "datetime", Default: nd("2020-01-01 00:00:00")}, "DEFAULT '2020-01-01 00:00:00'"},
+		{"datetime 函数默认", ColDef{Name: "created", ColumnType: "datetime", RawType: "datetime", Default: nd("CURRENT_TIMESTAMP")}, "DEFAULT CURRENT_TIMESTAMP"},
+		{"timestamp fsp 函数默认", ColDef{Name: "ts", ColumnType: "timestamp", RawType: "timestamp(6)", Default: nd("CURRENT_TIMESTAMP(6)")}, "DEFAULT CURRENT_TIMESTAMP(6)"},
+		{"int 默认加引号", ColDef{Name: "n", ColumnType: "int", RawType: "int", Default: nd("0")}, "DEFAULT '0'"},
+		{"varchar 默认加引号", ColDef{Name: "s", ColumnType: "varchar", RawType: "varchar(8)", Default: nd("x")}, "DEFAULT 'x'"},
+	}
+	for _, tc := range cases {
+		got := colDefSQL(tc.c)
+		if !strings.Contains(got, tc.want) {
+			t.Fatalf("%s: colDefSQL=%q 缺 %q", tc.name, got, tc.want)
+		}
+	}
+}
+
 // 唯一索引对账（2026-11-10 重启拒启陷阱修复）：源端 ADD UNIQUE INDEX 必须生成
 // 补建语句（非白名单）；目标多余唯一索引生成 DROP INDEX。
 func TestDiffDefs_UniqueIndex(t *testing.T) {

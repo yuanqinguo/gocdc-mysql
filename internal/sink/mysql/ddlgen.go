@@ -508,11 +508,14 @@ func colDefSQL(c ColDef) string {
 		switch {
 		case d == "NULL":
 			b.WriteString(" DEFAULT NULL")
-		case c.ColumnType == "timestamp" || c.ColumnType == "datetime":
-			b.WriteString(" DEFAULT " + d) // CURRENT_TIMESTAMP 等字面量
-		case isNumericType(c.ColumnType) || isVarcharFamily(c.ColumnType):
-			b.WriteString(" DEFAULT '" + strings.ReplaceAll(d, "'", "''") + "'")
+		case (c.ColumnType == "timestamp" || c.ColumnType == "datetime") && isTimestampFuncDefault(d):
+			// 函数型默认（CURRENT_TIMESTAMP / CURRENT_TIMESTAMP(fsp)）不加引号
+			b.WriteString(" DEFAULT " + d)
 		default:
+			// 其余一律加引号（含 datetime/timestamp 的字面量默认值，如
+			// "2020-01-01 00:00:00"——information_schema 返回时不带引号，
+			// 原样拼接会生成 DEFAULT 2020-01-01 00:00:00 非法 SQL，
+			// 2026-11-16 review 二轮）
 			b.WriteString(" DEFAULT '" + strings.ReplaceAll(d, "'", "''") + "'")
 		}
 	}
@@ -563,6 +566,14 @@ func buildCreateTable(schemaName, table string, src *tableDef) string {
 
 func isVarcharFamily(t string) bool {
 	return t == "varchar" || t == "char" || t == "varbinary" || t == "binary"
+}
+
+// isTimestampFuncDefault 默认值是否为 CURRENT_TIMESTAMP 函数形态（含 fsp 精度）。
+// information_schema.COLUMN_DEFAULT 对函数型默认返回 "CURRENT_TIMESTAMP" 或
+// "CURRENT_TIMESTAMP(6)"（小写），对字面量默认返回不带引号的裸字面量——后者必须
+// 加引号拼接，前者原样（2026-11-16 review 二轮）。
+func isTimestampFuncDefault(d string) bool {
+	return strings.HasPrefix(strings.ToUpper(d), "CURRENT_TIMESTAMP")
 }
 
 func isNumericType(t string) bool {
