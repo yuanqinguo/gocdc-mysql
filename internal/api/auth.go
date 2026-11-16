@@ -30,25 +30,87 @@ type AuthConfig struct {
 }
 
 // authMiddleware HTTP Basic 鉴权（单用户名密码）。恒时比较经 SHA-256 归一，
-// 避免长度差泄漏；who = 用户名（审计）。
-func authMiddleware(cfg AuthConfig) gin.HandlerFunc {
+// 避免长度差泄漏；who = 用户名（审计）。throttle 为登录失败限速器（nil =
+// 不限速，测试用）；同一 router 的 api 组与 NoRoute 兜底必须共享同一实例。
+func authMiddleware(cfg AuthConfig, throttle *authThrottle) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if cfg.AuthDisabled {
 			c.Set("who", "anonymous")
 			c.Next()
 			return
 		}
+		if throttle != nil && throttle.locked() {
+			abort401(c, "登录失败次数过多，已临时锁定，请稍后重试")
+			return
+		}
 		user, pass, ok := c.Request.BasicAuth()
 		if !ok {
+			// 未携带凭据不计失败（SPA 未登录轮询/浏览器首次弹框是常态，
+			// 计数会让普通页面加载把所有人锁死）
 			abort401(c, "缺少 Authorization: Basic 凭据（用户名+密码）")
 			return
 		}
 		if !equalCred(user, cfg.Username) || !equalCred(pass, cfg.Password) {
+			if throttle != nil {
+				throttle.recordFailure()
+			}
 			abort401(c, "凭据无效")
 			return
 		}
 		c.Set("who", user)
 		c.Next()
+	}
+}
+
+// ── 登录失败限速（2026-11-16 review P3-3）──
+//
+// 进程内滑动窗口 + 短锁定：窗口内失败 ≥ limit 即锁定 lockout，锁定期内
+// 一律 401（正确口令也拒绝——暴力破解不能靠"最后碰对一次"穿透）。
+// 取舍说明：
+//   - 全局计数而非按 IP：管理台通常经反代，远端地址不可信；单用户架构下
+//     全局锁定的 DoS 面由放宽容忍（20 次/分钟）折中；
+//   - 成功登录不清零窗口：防"间歇试错 + 命中即重置"绕过，窗口自然过期；
+//   - 仅进程内：重启清零可接受（攻击者换来的只是重新计数的窗口）。
+const (
+	authFailWindow = time.Minute  // 失败计数滑动窗口
+	authFailLimit  = 20           // 窗口内失败上限
+	authLockout    = 30 * time.Second // 触发后的锁定时长
+)
+
+// authThrottle 登录失败限速器（并发安全）。
+type authThrottle struct {
+	mu         sync.Mutex
+	fails      []time.Time
+	lockedTill time.Time
+	now        func() time.Time // 测试可注入
+}
+
+// newAuthThrottle 构造（每个 router 一份，api 组与 NoRoute 共享）。
+func newAuthThrottle() *authThrottle {
+	return &authThrottle{now: time.Now}
+}
+
+// locked 当前是否处于锁定期。
+func (a *authThrottle) locked() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.now().Before(a.lockedTill)
+}
+
+// recordFailure 记一次凭据失败；窗口内累计达上限则进入锁定并消费窗口。
+func (a *authThrottle) recordFailure() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	now := a.now()
+	a.fails = append(a.fails, now)
+	cut := 0
+	for cut < len(a.fails) && now.Sub(a.fails[cut]) > authFailWindow {
+		cut++
+	}
+	a.fails = a.fails[cut:]
+	if len(a.fails) >= authFailLimit {
+		a.lockedTill = now.Add(authLockout)
+		a.fails = a.fails[:0]
 	}
 }
 

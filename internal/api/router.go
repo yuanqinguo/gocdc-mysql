@@ -115,7 +115,8 @@ func NewRouter(deps Deps, auth AuthConfig) *gin.Engine {
 
 	h := apiHandlers{Deps: deps}
 	api := r.Group("/api/v1")
-	api.Use(authMiddleware(auth))
+	authTh := newAuthThrottle() // api 组与 NoRoute 兜底共享同一限速器（review P3-3）
+	api.Use(authMiddleware(auth, authTh))
 
 	// ── 只读（cluster 级）──
 	api.GET("/status", h.status)
@@ -158,7 +159,7 @@ func NewRouter(deps Deps, auth AuthConfig) *gin.Engine {
 	// still follow the Basic auth boundary and never fall through to index.html.
 	r.NoRoute(func(c *gin.Context) {
 		if path := c.Request.URL.Path; path == "/api/v1" || strings.HasPrefix(path, "/api/v1/") {
-			authMiddleware(auth)(c)
+			authMiddleware(auth, authTh)(c)
 			if c.IsAborted() {
 				return
 			}
