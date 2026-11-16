@@ -19,7 +19,7 @@ const AuthContext = createContext<AuthContextValue | null>(null)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient()
-  // 刷新页面时从会话 Cookie 恢复登录态，过期后 Cookie 被浏览器清除则回到登录页
+  // 刷新页面时从 sessionStorage 恢复登录态（随标签页会话存活，关闭标签即清除）
   const [session, setSession] = useState<AuthSession | null>(() => readStoredSession() ?? null)
 
   const login = useCallback((credentials: ApiCredentials | null) => {

@@ -11,7 +11,7 @@ npm run dev
 
 Vite serves on `http://127.0.0.1:5173` and proxies `/api` to `http://127.0.0.1:8060`. Override the target with `VITE_API_PROXY_TARGET` in a local `.env` file. Go service must be running with `observability.web.enabled: true`.
 
-The login credential is kept in memory only. In an explicitly `auth_disabled` deployment, use the “continue without credentials” option.
+The login credential is kept in the current tab's `sessionStorage` only — cleared when the tab closes or you disconnect; it is never written to the server. In an explicitly `auth_disabled` deployment, use the “continue without credentials” option.
 
 ## Checks and build
 

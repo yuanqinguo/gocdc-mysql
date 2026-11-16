@@ -1,23 +1,25 @@
 import type { ApiCredentials } from '@/shared/api/types'
 
-const SESSION_COOKIE = 'gocdc_session'
-const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60
+// 2026-11-16 review P3-2（过渡方案）：凭据改存 sessionStorage——
+// 原实现写入 7 天持久 Cookie（JS 可读），管理员口令长期落盘且任何 XSS
+// 可直接窃取。sessionStorage 生命周期 = 标签页会话：关闭标签即清除，
+// 不落盘、不跨标签共享，显著缩小暴露面。
+// 长期建议（报告 P3-2 主方案）：服务端签发 HttpOnly 会话 Cookie，前端
+// 不再持有原始口令；生产部署强制 TLS 反代（见 deploy/README.md）。
+const SESSION_KEY = 'gocdc_session'
 
 interface StoredSession {
   credentials: ApiCredentials | null
 }
 
-/** 从 Cookie 恢复登录态；返回 undefined 表示没有有效会话（未登录或数据损坏）。 */
+/** 从 sessionStorage 恢复登录态；返回 undefined 表示没有有效会话（未登录或数据损坏）。 */
 export function readStoredSession(): StoredSession | undefined {
-  const raw = document.cookie
-    .split('; ')
-    .find((entry) => entry.startsWith(`${SESSION_COOKIE}=`))
-    ?.slice(SESSION_COOKIE.length + 1)
+  const raw = globalThis.sessionStorage?.getItem(SESSION_KEY)
   if (!raw) return undefined
 
   let payload: unknown
   try {
-    payload = JSON.parse(decodeURIComponent(raw)) as unknown
+    payload = JSON.parse(raw) as unknown
   } catch {
     return undefined
   }
@@ -29,19 +31,13 @@ export function readStoredSession(): StoredSession | undefined {
   return { credentials: { username, password } }
 }
 
-/** 登录成功后写入会话 Cookie，过期时间由 Max-Age 控制。 */
+/** 登录成功后写入会话存储（随标签页会话存活，关闭标签即清除）。 */
 export function storeSession(credentials: ApiCredentials | null): void {
   const payload = credentials ?? { username: '', password: '' }
-  document.cookie = [
-    `${SESSION_COOKIE}=${encodeURIComponent(JSON.stringify(payload))}`,
-    `Max-Age=${SESSION_TTL_SECONDS}`,
-    'Path=/',
-    'SameSite=Lax',
-    ...(globalThis.location?.protocol === 'https:' ? ['Secure'] : []),
-  ].join('; ')
+  globalThis.sessionStorage?.setItem(SESSION_KEY, JSON.stringify(payload))
 }
 
-/** 退出登录或会话失效时清除 Cookie。 */
+/** 退出登录或会话失效时清除存储。 */
 export function clearStoredSession(): void {
-  document.cookie = `${SESSION_COOKIE}=; Max-Age=0; Path=/; SameSite=Lax`
+  globalThis.sessionStorage?.removeItem(SESSION_KEY)
 }

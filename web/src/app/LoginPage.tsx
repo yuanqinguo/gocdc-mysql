@@ -96,7 +96,7 @@ export function LoginPage() {
           <div className="login-actions">
             <Button type="link" block onClick={continueWithoutCredentials} loading={checking}>此服务已显式关闭鉴权？无凭据继续</Button>
           </div>
-          <p className="login-footnote">凭据将保存在本机 Cookie 中（7 天后自动过期），「断开连接」即清除。</p>
+          <p className="login-footnote">凭据仅保留在本标签页会话中（关闭标签页即清除），「断开连接」立即清除。</p>
         </div>
         <div className="login-footer">gocdc · MySQL CDC 控制台</div>
       </section>

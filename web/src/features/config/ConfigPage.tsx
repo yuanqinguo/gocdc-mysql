@@ -62,7 +62,7 @@ export function ConfigPage() {
     </section>
     <div className="note-line">
       <SafetyCertificateOutlined />
-      <span><b>服务端脱敏</b> · 配置页面展示由 Go API 返回的数据。登录凭据仅保存在本机 Cookie 中，不写入服务端。</span>
+      <span><b>服务端脱敏</b> · 配置页面展示由 Go API 返回的数据。登录凭据仅保留在本标签页会话中，不写入服务端。</span>
     </div>
   </>
 }

@@ -40,7 +40,7 @@ describe('AuthGate', () => {
     expect(screen.queryByText('已连接控制台')).not.toBeInTheDocument()
   })
 
-  it('restores a credential session from the cookie after remount', async () => {
+  it('restores a credential session from session storage after remount', async () => {
     stubStatusOk()
     storeSession({ username: 'admin', password: 'secret' })
     renderGate()
@@ -48,14 +48,14 @@ describe('AuthGate', () => {
     expect(screen.queryByText('欢迎回来')).not.toBeInTheDocument()
   })
 
-  it('restores an anonymous session (auth disabled on server) from the cookie', async () => {
+  it('restores an anonymous session (auth disabled on server) from session storage', async () => {
     stubStatusOk()
     storeSession(null)
     renderGate()
     expect(await screen.findByText('已连接控制台')).toBeInTheDocument()
   })
 
-  it('clears the stored cookie on logout', async () => {
+  it('clears the stored session on logout', async () => {
     stubStatusOk()
     storeSession({ username: 'admin', password: 'secret' })
     const user = userEvent.setup()
@@ -79,6 +79,6 @@ describe('AuthGate', () => {
     await user.click(screen.getByText('断开连接'))
 
     expect(screen.getByText('欢迎回来')).toBeInTheDocument()
-    expect(document.cookie).not.toContain('gocdc_session=')
+    expect(globalThis.sessionStorage.getItem('gocdc_session')).toBeNull()
   })
 })
