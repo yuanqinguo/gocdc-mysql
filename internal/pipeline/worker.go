@@ -420,6 +420,11 @@ func (w *Worker) handleDDL(ctx context.Context, u *EventUnit) error {
 		// 表被 DROP 等：结构刷新失败按 pause 人工介入，绝不静默跳过
 		w.log.Warn("DDL 后源表结构刷新失败", zap.Error(rerr),
 			zap.String("schema", schemaName), zap.String("table", tableName))
+		// 源表已消亡：缓存条目一并清除——按旧名 Get 此后走 ErrTableNotFound
+		// 跳过路径，而不是命中永不再刷新的陈旧结构（2026-11-16 review P3-1）
+		if errors.Is(rerr, schema.ErrTableNotFound) {
+			w.schemaMgr.Drop(schemaName, tableName)
+		}
 	}
 
 	rec := DDLRecord{
@@ -489,6 +494,9 @@ func (w *Worker) handleDDL(ctx context.Context, u *EventUnit) error {
 			if _, rerr := w.schemaMgr.Refresh(ctx, schemaName, tableName); rerr != nil {
 				w.log.Warn("DDL 对账后结构缓存刷新失败", zap.Error(rerr),
 					zap.String("schema", schemaName), zap.String("table", tableName))
+				if errors.Is(rerr, schema.ErrTableNotFound) {
+					w.schemaMgr.Drop(schemaName, tableName) // 表已消亡：清陈旧缓存（review P3-1）
+				}
 			}
 		}
 		if gerr != nil {

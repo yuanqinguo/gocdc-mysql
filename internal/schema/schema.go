@@ -71,6 +71,27 @@ func (m *Manager) Refresh(ctx context.Context, schemaName, table string) (*model
 	return m.load(ctx, schemaName, table)
 }
 
+// Drop 移除缓存条目（DROP TABLE/RENAME 后由 DDL 处理路径调用，2026-11-16
+// review P3-1）：旧名条目此后永不再被刷新/命中，常驻即泄漏；且按旧名 Get
+// 命中陈旧结构比 ErrTableNotFound 更危险。版本计数保留（同表名重建后版本
+// 仍单调，一条 uint64 的驻留可忽略）。不存在时 no-op；幂等。
+func (m *Manager) Drop(schemaName, table string) {
+	k := key(schemaName, table)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cur := m.cur.Load()
+	if _, ok := cur.tables[k]; !ok {
+		return
+	}
+	next := &snapshot{tables: make(map[string]*model.TableMeta, len(cur.tables))}
+	for kk, v := range cur.tables {
+		if kk != k {
+			next.tables[kk] = v
+		}
+	}
+	m.cur.Store(next)
+}
+
 // Preload 预热规则覆盖的全部表（启动期 fail-fast：任一表不可加载即报错清单）。
 type TableRef struct{ Schema, Table string }
 

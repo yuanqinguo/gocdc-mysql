@@ -31,6 +31,15 @@ func TestParseColumnType(t *testing.T) {
 		{`enum('a','b''q','c\\d')`, "enum", false, 0, 0, false, []string{"a", "b'q", "c\\d"}},
 		{"set('x','y')", "set", false, 0, 0, false, []string{"x", "y"}},
 		{"int(11)", "int", false, 11, 0, true, nil},
+		// ── 2026-11-16 review P1-1/P1-2 回归 ──
+		// enum/set 取值为数据，大小写必须原样保留（此前整体 ToLower 不可逆破坏）
+		{"enum('New','Done','IN_PROGRESS')", "enum", false, 0, 0, false, []string{"New", "Done", "IN_PROGRESS"}},
+		{"set('A','bB')", "set", false, 0, 0, false, []string{"A", "bB"}},
+		// unsigned zerofill：按属性词判定（zerofill 隐含 unsigned），不再丢位
+		{"bigint(20) unsigned zerofill", "bigint", true, 20, 0, true, nil},
+		{"decimal(10,2) unsigned zerofill", "decimal", true, 10, 2, true, nil},
+		{"int unsigned zerofill", "int", true, 0, 0, false, nil},
+		{"int zerofill", "int", true, 0, 0, false, nil},
 	}
 	for _, tc := range cases {
 		p := parseColumnType(tc.in)
@@ -117,6 +126,31 @@ func TestManager_LoadAndVersion(t *testing.T) {
 	// 未加载表的错误直传
 	if _, err := m.Get(ctx, "db1", "ghost"); !errors.Is(err, ErrTableNotFound) {
 		t.Fatalf("期望 ErrTableNotFound: %v", err)
+	}
+}
+
+// TestManager_Drop 缓存条目清除（2026-11-16 review P3-1）：DROP 后旧名不再
+// 命中陈旧结构、重新懒加载；版本计数保留（同表名重建后版本单调）；no-op 幂等。
+func TestManager_Drop(t *testing.T) {
+	s := newStub()
+	m := NewManager(s)
+	ctx := context.Background()
+
+	t1, err := m.Get(ctx, "db1", "users")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Drop("DB1", "USERS") // 大小写归一
+	m.Drop("db1", "ghost") // 不存在：no-op
+	if _, err := m.Get(ctx, "db1", "users"); err != nil {
+		t.Fatal(err) // Drop 后应重新懒加载而非报错
+	}
+	if s.calls != 2 {
+		t.Fatalf("Drop 后 Get 应触发重查，calls=%d", s.calls)
+	}
+	t2, _ := m.Get(ctx, "db1", "users")
+	if t2.Version <= t1.Version {
+		t.Fatalf("版本计数应跨 Drop 单调：t1=%d t2=%d", t1.Version, t2.Version)
 	}
 }
 
