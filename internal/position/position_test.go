@@ -7,7 +7,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -166,28 +165,5 @@ func TestStore_Load(t *testing.T) {
 	fk.mu.Unlock()
 	if _, _, err := s.Load(context.Background()); err == nil || !strings.Contains(err.Error(), "解析失败") {
 		t.Fatalf("坏位点应报错: %v", err)
-	}
-}
-
-func TestThrottler(t *testing.T) {
-	th := NewThrottler(3 * time.Second)
-	t0 := time.Unix(1000, 0)
-	if !th.Allow(t0) {
-		t.Fatal("首次应允许")
-	}
-	if th.Allow(t0.Add(1 * time.Second)) {
-		t.Fatal("窗口内应拒绝")
-	}
-	if !th.Allow(t0.Add(3 * time.Second)) {
-		t.Fatal("窗口过后应允许")
-	}
-	// Reset 后立即拒绝（强制保存重置窗口）
-	th.Reset(t0.Add(4 * time.Second))
-	if th.Allow(t0.Add(5 * time.Second)) {
-		t.Fatal("Reset 后窗口内应拒绝")
-	}
-	// interval=0 每次允许
-	if !NewThrottler(0).Allow(t0) || !NewThrottler(0).Allow(t0) {
-		t.Fatal("interval=0 应每次允许")
 	}
 }

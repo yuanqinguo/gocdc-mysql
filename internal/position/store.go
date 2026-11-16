@@ -1,10 +1,10 @@
-// Package position 实现位点的 etcd 存储与保存节流（03 §5）：
+// Package position 实现位点的 etcd 存储（03 §5）：
 //   - Store：位点 key 读写；写侧带 lease 门槛事务——Compare LeaseID(gateKey)
 //     必须等于本进程 lease（选主后即 leader 的 election key；单节点部署时为节点
 //     注册 key），lease 失效/失主时写入被拒（03 §4-2：新 leader 位点不被旧
 //     leader 覆盖，防分区双写）。
-//   - Throttler：XID 路径节流；rotate/DDL/停机/全量交接为强制保存，不走节流
-//     （03 §5.2 触发清单，强制路径由 Persister 直接调 Store.Save）。
+//   - 保存节流由 pipeline.Persister 的周期承担（save interval）；rotate/DDL/
+//     停机/全量交接为强制保存，不经节流（03 §5.2 触发清单）。
 //
 // Position 模型见 internal/model（与 03 §5.1 JSON 结构一致）。
 package position

@@ -22,8 +22,8 @@ type PositionStore interface {
 }
 
 // Persister 位点落盘（03 §5.2）：
-//   - 周期（save interval，默认 3s）检查水位推进 → 写 etcd（节流由周期天然承担，
-//     Throttler 供外部强制路径共享节流窗口）；
+//   - 周期（save interval，默认 3s）检查水位推进 → 写 etcd（节流由周期天然
+//     承担，无独立节流器；强制路径不经节流）；
 //   - 强制路径（rotate/DDL/停机/全量交接）经 Force 立即写；
 //   - 失败不关管线：退避重试 + 计数 + 告警；连续失败 ≥ maxFailures 熔断（回调停管线）——
 //     一次抖动不该永久停摆且无告警，而位点写不进还继续消费会放大重放窗口，
